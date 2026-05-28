@@ -17,9 +17,10 @@ def extract_building_outline(image_path: str):
     # Let's try color thresholding in HSV space instead of edge detection
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-    # These bounds are for the typical building color in maps
-    lower_bound = np.array([0, 0, 200])
-    upper_bound = np.array([40, 40, 250])
+    # Google maps buildings have a specific grey color #EBECE8 or similar
+    # Adjust thresholds to be tighter to building colors to avoid capturing the whole map
+    lower_bound = np.array([0, 0, 215])
+    upper_bound = np.array([180, 25, 245])
 
     mask = cv2.inRange(hsv, lower_bound, upper_bound)
 
@@ -39,7 +40,8 @@ def extract_building_outline(image_path: str):
 
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < 2000 or area > (h * w * 0.5): # Buildings are usually decently sized
+        # Buildings aren't usually > 25% of the screen.
+        if area < 500 or area > (h * w * 0.25):
             continue
 
         epsilon = 0.01 * cv2.arcLength(cnt, True)
@@ -53,15 +55,15 @@ def extract_building_outline(image_path: str):
             # Distance to center
             dist = np.sqrt((cx - center[0])**2 + (cy - center[1])**2)
 
-            # Score favors large area and closeness to center
+            # Score favors closeness to center and area
             score = dist / np.sqrt(area)
             if score < best_score:
                 best_score = score
                 best_contour = approx
 
     if best_contour is None:
-        # Fallback to returning a default square in the middle if nothing found
-        s = 100
+        # Fallback to returning a smaller default square in the middle if nothing found
+        s = 50
         best_contour = np.array([[[center[0]-s, center[1]-s]], [[center[0]+s, center[1]-s]], [[center[0]+s, center[1]+s]], [[center[0]-s, center[1]+s]]])
 
     pixel_area = cv2.contourArea(best_contour)

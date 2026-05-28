@@ -1,4 +1,6 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef } from 'react'
+import WindowsDoors from './WindowsDoors'
+import type { WindowEntry, DoorEntry } from './types'
 
 type Point = { x: number, y: number }
 
@@ -13,6 +15,7 @@ type ExtractionData = {
   climate: {
     summer_design_temp: number
     winter_design_temp: number
+    outdoor_humidity: number
   }
   defaults: {
     year_built: number
@@ -34,10 +37,36 @@ export default function App() {
   const [houseHeight, setHouseHeight] = useState(10)
   const [secondStory, setSecondStory] = useState(false)
   const [residents, setResidents] = useState(2)
-  const [windows, setWindows] = useState(8)
-  const [rValues, setRValues] = useState({ wall: 13, roof: 30, windowU: 0.35 })
+
+  const [windows, setWindows] = useState<WindowEntry[]>(Array(6).fill(null).map((_, i) => ({
+    id: `win-${i}`,
+    width: 3,
+    height: 5,
+    orientation: 'S',
+    uValue: 0.35,
+    shgc: 0.25,
+    description: `Window ${i + 1}`
+  })))
+
+  const [doors, setDoors] = useState<DoorEntry[]>([{
+    id: 'door-1',
+    width: 3,
+    height: 6.8,
+    uValue: 0.5,
+    description: 'Front Door'
+  }])
+
+  const [rValues, setRValues] = useState({ wall: 13, roof: 30 })
+
+  // Climate Inputs
+  const [indoorSummerTemp, setIndoorSummerTemp] = useState(75)
+  const [indoorWinterTemp, setIndoorWinterTemp] = useState(70)
+  const [indoorHumidity, setIndoorHumidity] = useState(50)
+  const [outdoorSummerTemp, setOutdoorSummerTemp] = useState(95)
+  const [outdoorWinterTemp, setOutdoorWinterTemp] = useState(30)
 
   const svgRef = useRef<SVGSVGElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleExtract = async () => {
     if (!url) return
@@ -59,11 +88,14 @@ export default function App() {
       const resData = await res.json()
       setData(resData)
       setPolygon(resData.polygon)
+      setOutdoorSummerTemp(resData.climate.summer_design_temp)
+      setOutdoorWinterTemp(resData.climate.winter_design_temp)
       setRValues({
         wall: resData.defaults.wall_r_value,
-        roof: resData.defaults.roof_r_value,
-        windowU: resData.defaults.window_u_factor
+        roof: resData.defaults.roof_r_value
       })
+      // Update window defaults if we fetch them
+      setWindows(prev => prev.map(w => ({ ...w, uValue: resData.defaults.window_u_factor })))
     } catch (err: any) {
       setError(err.message)
     } finally {
@@ -100,6 +132,14 @@ export default function App() {
 
   const handlePointerDown = (e: React.PointerEvent, index: number) => {
     e.stopPropagation()
+    if (e.button === 2) {
+      // Right click to delete vertex
+      e.preventDefault()
+      if (polygon.length > 3) {
+        setPolygon(prev => prev.filter((_, i) => i !== index))
+      }
+      return
+    }
     setActiveNode(index)
     e.currentTarget.setPointerCapture(e.pointerId)
   }
@@ -114,9 +154,13 @@ export default function App() {
 
     const svgP = pt.matrixTransform(svg.getScreenCTM()?.inverse())
 
+    // Constrain points to bounds
+    const boundedX = Math.max(0, Math.min(1280, svgP.x))
+    const boundedY = Math.max(0, Math.min(800, svgP.y))
+
     setPolygon(prev => {
       const next = [...prev]
-      next[activeNode] = { x: svgP.x, y: svgP.y }
+      next[activeNode] = { x: boundedX, y: boundedY }
       return next
     })
   }
@@ -126,6 +170,22 @@ export default function App() {
     e.currentTarget.releasePointerCapture(e.pointerId)
   }
 
+  const handleSvgClick = (e: React.MouseEvent) => {
+    if (!svgRef.current) return
+    // Only handle direct clicks on the SVG (or polygon), not on circles
+    if ((e.target as any).tagName === 'circle') return
+
+    const svg = svgRef.current
+    const pt = svg.createSVGPoint()
+    pt.x = e.clientX
+    pt.y = e.clientY
+
+    const svgP = pt.matrixTransform(svg.getScreenCTM()?.inverse())
+
+    // Add point to the end
+    setPolygon(prev => [...prev, { x: svgP.x, y: svgP.y }])
+  }
+
   const polyStr = polygon.map(p => `${p.x},${p.y}`).join(" ")
   const geom = data ? calculateGeometries(polygon, data.scale) : { area: 0, perimeter: 0 }
 
@@ -133,13 +193,14 @@ export default function App() {
   const calculateLoad = () => {
     if (!data) return null
 
-    const dtCooling = data.climate.summer_design_temp - 75 // Assume 75F indoor
-    const dtHeating = 70 - data.climate.winter_design_temp // Assume 70F indoor
+    const dtCooling = outdoorSummerTemp - indoorSummerTemp
+    const dtHeating = indoorWinterTemp - outdoorWinterTemp
 
     // Area of elements
     const wallArea = geom.perimeter * houseHeight * (secondStory ? 2 : 1)
-    const windowArea = windows * 15 // Assume 15 sqft per window
-    const netWallArea = Math.max(0, wallArea - windowArea)
+    const windowAreaTotal = windows.reduce((sum, w) => sum + (w.width * w.height), 0)
+    const doorAreaTotal = doors.reduce((sum, d) => sum + (d.width * d.height), 0)
+    const netWallArea = Math.max(0, wallArea - windowAreaTotal - doorAreaTotal)
     const roofArea = geom.area
 
     // U-values = 1/R-value
@@ -149,17 +210,44 @@ export default function App() {
     // Sensible Cooling (BTU/h) = Area * U * DT
     const sensibleWallCool = netWallArea * wallU * dtCooling
     const sensibleRoofCool = roofArea * roofU * dtCooling
-    const sensibleWindowCool = windowArea * rValues.windowU * dtCooling * 1.5 // Added solar heat gain factor approx
+
+    // Individual Window Cooling (Sensible = U*Area*DT + Area*SHGC*HTM_Solar)
+    // Simplified HTM Solar based on standard approximations
+    const sensibleWindowCool = windows.reduce((sum, w) => {
+      const area = w.width * w.height
+      const conduction = area * w.uValue * dtCooling
+      // Rough solar gain factor depending on orientation
+      let solarFactor = 30
+      if (['E', 'W'].includes(w.orientation)) solarFactor = 60
+      if (['SE', 'SW', 'S'].includes(w.orientation)) solarFactor = 45
+      const solarGain = area * w.shgc * solarFactor
+      return sum + conduction + solarGain
+    }, 0)
+
+    const sensibleDoorCool = doors.reduce((sum, d) => {
+      const area = d.width * d.height
+      return sum + (area * d.uValue * dtCooling)
+    }, 0)
+
     const internalCool = residents * 400 // Latent+Sensible roughly 400 BTU per person
 
-    const totalCooling = sensibleWallCool + sensibleRoofCool + sensibleWindowCool + internalCool
+    const totalCooling = sensibleWallCool + sensibleRoofCool + sensibleWindowCool + sensibleDoorCool + internalCool
 
     // Heating (BTU/h)
     const heatWall = netWallArea * wallU * dtHeating
     const heatRoof = roofArea * roofU * dtHeating
-    const heatWindow = windowArea * rValues.windowU * dtHeating
 
-    const totalHeating = heatWall + heatRoof + heatWindow
+    const heatWindow = windows.reduce((sum, w) => {
+      const area = w.width * w.height
+      return sum + (area * w.uValue * dtHeating)
+    }, 0)
+
+    const heatDoor = doors.reduce((sum, d) => {
+      const area = d.width * d.height
+      return sum + (area * d.uValue * dtHeating)
+    }, 0)
+
+    const totalHeating = heatWall + heatRoof + heatWindow + heatDoor
 
     return {
       cooling: Math.round(totalCooling),
@@ -170,11 +258,79 @@ export default function App() {
 
   const loads = calculateLoad()
 
+  const handleExport = () => {
+    if (!data) return
+    const exportData = {
+      sourceData: data,
+      state: {
+        url,
+        polygon,
+        houseHeight,
+        secondStory,
+        residents,
+        windows,
+        doors,
+        rValues,
+        indoorSummerTemp,
+        indoorWinterTemp,
+        indoorHumidity,
+        outdoorSummerTemp,
+        outdoorWinterTemp
+      },
+      calculation: {
+        geometry: geom,
+        loads
+      }
+    }
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = 'manual_j_export.json'
+    link.click()
+  }
+
+  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      try {
+        const imported = JSON.parse(event.target?.result as string)
+        if (imported.sourceData && imported.state) {
+          setData(imported.sourceData)
+          setUrl(imported.state.url)
+          setPolygon(imported.state.polygon)
+          setHouseHeight(imported.state.houseHeight)
+          setSecondStory(imported.state.secondStory)
+          setWindows(imported.state.windows)
+          setDoors(imported.state.doors)
+          setRValues(imported.state.rValues)
+          setIndoorSummerTemp(imported.state.indoorSummerTemp)
+          setIndoorWinterTemp(imported.state.indoorWinterTemp)
+          setIndoorHumidity(imported.state.indoorHumidity)
+          if (imported.state.outdoorSummerTemp !== undefined) setOutdoorSummerTemp(imported.state.outdoorSummerTemp)
+          if (imported.state.outdoorWinterTemp !== undefined) setOutdoorWinterTemp(imported.state.outdoorWinterTemp)
+        }
+      } catch (err) {
+        alert("Failed to parse JSON")
+      }
+    }
+    reader.readAsText(file)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 p-8 font-sans">
       <div className="max-w-6xl mx-auto space-y-6">
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-          <h1 className="text-2xl font-bold mb-4">Auto Manual J Calculator</h1>
+          <div className="flex justify-between items-center mb-4">
+            <h1 className="text-2xl font-bold">Auto Manual J Calculator</h1>
+            <div className="space-x-2">
+              <input type="file" accept=".json" className="hidden" ref={fileInputRef} onChange={handleImport} />
+              <button onClick={() => fileInputRef.current?.click()} className="text-sm px-3 py-1.5 border rounded hover:bg-gray-50">Import JSON</button>
+              <button onClick={handleExport} className="text-sm px-3 py-1.5 border rounded hover:bg-gray-50" disabled={!data}>Export JSON</button>
+            </div>
+          </div>
           <div className="flex gap-4">
             <input
               type="text"
@@ -200,7 +356,7 @@ export default function App() {
             {/* Left Column: Image Map Editor */}
             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col">
               <h2 className="text-lg font-semibold mb-2">Refine Footprint</h2>
-              <p className="text-sm text-gray-500 mb-4">Drag the points to align perfectly with the building outline.</p>
+              <p className="text-sm text-gray-500 mb-4">Drag the points to align perfectly with the building outline. Click on the map to add new points, or right-click a point to delete it.</p>
 
               <div className="relative border rounded-lg overflow-hidden flex-1 select-none flex items-center justify-center bg-gray-100" style={{minHeight: 400}}>
                 <img
@@ -216,6 +372,8 @@ export default function App() {
                   onPointerMove={handlePointerMove}
                   onPointerUp={handlePointerUp}
                   onPointerLeave={handlePointerUp}
+                  onClick={handleSvgClick}
+                  onContextMenu={(e) => e.preventDefault()}
                   viewBox="0 0 1280 800" // Assuming the playwright capture resolution
                   preserveAspectRatio="xMidYMid slice"
                 >
@@ -265,8 +423,8 @@ export default function App() {
                     <input type="number" className="w-full p-2 border rounded" value={houseHeight} onChange={e => setHouseHeight(Number(e.target.value))} />
                   </div>
                   <div>
-                    <label className="block text-sm text-gray-600 mb-1">Number of Windows</label>
-                    <input type="number" className="w-full p-2 border rounded" value={windows} onChange={e => setWindows(Number(e.target.value))} />
+                    <label className="block text-sm text-gray-600 mb-1">Number of Occupants</label>
+                    <input type="number" className="w-full p-2 border rounded" value={residents} onChange={e => setResidents(Number(e.target.value))} />
                   </div>
                   <div className="col-span-2 flex items-center gap-2 mt-2">
                     <input type="checkbox" id="secondStory" checked={secondStory} onChange={e => setSecondStory(e.target.checked)} className="w-4 h-4" />
@@ -274,17 +432,47 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="mt-6">
-                  <h3 className="text-sm font-semibold mb-3 border-b pb-2">Climate & Defaults (Auto-detected)</h3>
+                <div className="mt-6 border-t pt-4">
+                  <WindowsDoors
+                    windows={windows} setWindows={setWindows}
+                    doors={doors} setDoors={setDoors}
+                  />
+                </div>
+
+                <div className="mt-6 border-t pt-4">
+                  <h3 className="text-sm font-semibold mb-3 border-b pb-2">Climate & Envelope Defaults</h3>
+
+                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 text-sm mb-4">
+                    <div>
+                      <label className="text-gray-500 block mb-1">Outdoor Summer Design (°F)</label>
+                      <input type="number" step="0.1" className="w-full p-1 border rounded" value={outdoorSummerTemp} onChange={e => setOutdoorSummerTemp(Number(e.target.value))} />
+                    </div>
+                    <div>
+                      <label className="text-gray-500 block mb-1">Outdoor Winter Design (°F)</label>
+                      <input type="number" step="0.1" className="w-full p-1 border rounded" value={outdoorWinterTemp} onChange={e => setOutdoorWinterTemp(Number(e.target.value))} />
+                    </div>
+                    <div>
+                      <span className="text-gray-500 block mb-1">Outdoor Humidity</span>
+                      <span className="font-medium">{data.climate.outdoor_humidity}%</span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 text-sm mb-4">
+                    <div>
+                      <label className="block text-gray-500 mb-1">Indoor Summer Temp</label>
+                      <input type="number" className="w-full p-1 border rounded" value={indoorSummerTemp} onChange={e => setIndoorSummerTemp(Number(e.target.value))} />
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 mb-1">Indoor Winter Temp</label>
+                      <input type="number" className="w-full p-1 border rounded" value={indoorWinterTemp} onChange={e => setIndoorWinterTemp(Number(e.target.value))} />
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 mb-1">Indoor Humidity (%)</label>
+                      <input type="number" className="w-full p-1 border rounded" value={indoorHumidity} onChange={e => setIndoorHumidity(Number(e.target.value))} />
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <span className="text-gray-500 block">Summer Design</span>
-                      {data.climate.summer_design_temp}°F
-                    </div>
-                    <div>
-                      <span className="text-gray-500 block">Winter Design</span>
-                      {data.climate.winter_design_temp}°F
-                    </div>
                     <div>
                       <label className="block text-gray-500 mb-1">Wall R-Value</label>
                       <input type="number" className="w-full p-1 border rounded" value={rValues.wall} onChange={e => setRValues({...rValues, wall: Number(e.target.value)})} />

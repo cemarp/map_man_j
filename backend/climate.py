@@ -38,7 +38,8 @@ def get_climate_data(lat: float, lng: float):
 
                 return {
                     "summer_design_temp": round(summer_design_f, 1),
-                    "winter_design_temp": round(winter_design_f, 1)
+                    "winter_design_temp": round(winter_design_f, 1),
+                    "outdoor_humidity": 50.0  # Estimated generic value
                 }
     except Exception as e:
         print(f"Failed to fetch climate data: {e}")
@@ -46,7 +47,8 @@ def get_climate_data(lat: float, lng: float):
     # Fallback default values
     return {
         "summer_design_temp": 95.0,
-        "winter_design_temp": 32.0
+        "winter_design_temp": 32.0,
+        "outdoor_humidity": 50.0
     }
 
 def get_property_defaults(lat: float, lng: float):
