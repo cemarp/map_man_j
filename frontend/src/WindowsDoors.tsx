@@ -10,6 +10,20 @@ interface WindowsDoorsProps {
 
 const orientations: Orientation[] = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
 
+const windowPresets = [
+  { label: 'Single Pane Clear', uValue: 1.04, shgc: 0.86 },
+  { label: 'Double Pane Clear', uValue: 0.76, shgc: 0.76 },
+  { label: 'Double Pane Low-E', uValue: 0.35, shgc: 0.25 },
+  { label: 'Triple Pane Low-E', uValue: 0.20, shgc: 0.15 },
+]
+
+const doorPresets = [
+  { label: 'Wood Solid Core', uValue: 0.50 },
+  { label: 'Steel Insulated', uValue: 0.17 },
+  { label: 'Fiberglass Insulated', uValue: 0.20 },
+  { label: 'Glass Sliding', uValue: 0.65 },
+]
+
 export default function WindowsDoors({ windows, setWindows, doors, setDoors }: WindowsDoorsProps) {
   const addWindow = () => {
     setWindows([...windows, {
@@ -64,6 +78,7 @@ export default function WindowsDoors({ windows, setWindows, doors, setDoors }: W
                 <th className="px-2 py-1">W (ft)</th>
                 <th className="px-2 py-1">H (ft)</th>
                 <th className="px-2 py-1">Orient</th>
+                <th className="px-2 py-1">Preset</th>
                 <th className="px-2 py-1">U-Val</th>
                 <th className="px-2 py-1">SHGC</th>
                 <th className="px-2 py-1"></th>
@@ -80,8 +95,23 @@ export default function WindowsDoors({ windows, setWindows, doors, setDoors }: W
                       {orientations.map(o => <option key={o} value={o}>{o}</option>)}
                     </select>
                   </td>
-                  <td className="p-1"><input type="number" step="0.01" className="w-16 border rounded px-1" value={w.uValue} onChange={(e) => updateWindow(w.id, 'uValue', Number(e.target.value))} /></td>
-                  <td className="p-1"><input type="number" step="0.01" className="w-16 border rounded px-1" value={w.shgc} onChange={(e) => updateWindow(w.id, 'shgc', Number(e.target.value))} /></td>
+                  <td className="p-1">
+                    <select
+                      className="border rounded px-1 text-xs w-32"
+                      onChange={(e) => {
+                        const preset = windowPresets.find(p => p.label === e.target.value)
+                        if (preset) {
+                          updateWindow(w.id, 'uValue', preset.uValue)
+                          updateWindow(w.id, 'shgc', preset.shgc)
+                        }
+                      }}
+                    >
+                      <option value="">Custom</option>
+                      {windowPresets.map(p => <option key={p.label} value={p.label}>{p.label}</option>)}
+                    </select>
+                  </td>
+                  <td className="p-1"><input type="number" step="0.01" className="w-14 border rounded px-1" value={w.uValue} onChange={(e) => updateWindow(w.id, 'uValue', Number(e.target.value))} /></td>
+                  <td className="p-1"><input type="number" step="0.01" className="w-14 border rounded px-1" value={w.shgc} onChange={(e) => updateWindow(w.id, 'shgc', Number(e.target.value))} /></td>
                   <td className="p-1"><button onClick={() => removeWindow(w.id)} className="text-red-500 font-bold hover:text-red-700">×</button></td>
                 </tr>
               ))}
@@ -103,6 +133,7 @@ export default function WindowsDoors({ windows, setWindows, doors, setDoors }: W
                 <th className="px-2 py-1">Desc</th>
                 <th className="px-2 py-1">W (ft)</th>
                 <th className="px-2 py-1">H (ft)</th>
+                <th className="px-2 py-1">Preset</th>
                 <th className="px-2 py-1">U-Value</th>
                 <th className="px-2 py-1"></th>
               </tr>
@@ -113,6 +144,20 @@ export default function WindowsDoors({ windows, setWindows, doors, setDoors }: W
                   <td className="p-1"><input className="w-32 border rounded px-1" value={d.description} onChange={(e) => updateDoor(d.id, 'description', e.target.value)} /></td>
                   <td className="p-1"><input type="number" step="0.1" className="w-16 border rounded px-1" value={d.width} onChange={(e) => updateDoor(d.id, 'width', Number(e.target.value))} /></td>
                   <td className="p-1"><input type="number" step="0.1" className="w-16 border rounded px-1" value={d.height} onChange={(e) => updateDoor(d.id, 'height', Number(e.target.value))} /></td>
+                  <td className="p-1">
+                    <select
+                      className="border rounded px-1 text-xs w-32"
+                      onChange={(e) => {
+                        const preset = doorPresets.find(p => p.label === e.target.value)
+                        if (preset) {
+                          updateDoor(d.id, 'uValue', preset.uValue)
+                        }
+                      }}
+                    >
+                      <option value="">Custom</option>
+                      {doorPresets.map(p => <option key={p.label} value={p.label}>{p.label}</option>)}
+                    </select>
+                  </td>
                   <td className="p-1"><input type="number" step="0.01" className="w-20 border rounded px-1" value={d.uValue} onChange={(e) => updateDoor(d.id, 'uValue', Number(e.target.value))} /></td>
                   <td className="p-1"><button onClick={() => removeDoor(d.id)} className="text-red-500 font-bold hover:text-red-700">×</button></td>
                 </tr>

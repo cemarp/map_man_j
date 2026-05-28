@@ -35,6 +35,28 @@ def extract_building_outline(image_path: str):
     h, w = img.shape[:2]
     center = (w // 2, h // 2)
 
+    # Try to find the red pin to use as the target point
+    target_point = center
+    lower_red1 = np.array([0, 100, 100])
+    upper_red1 = np.array([10, 255, 255])
+    mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
+
+    lower_red2 = np.array([170, 100, 100])
+    upper_red2 = np.array([180, 255, 255])
+    mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
+
+    mask_red = mask1 | mask2
+
+    pin_contours, _ = cv2.findContours(mask_red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    if pin_contours:
+        valid_pin_contours = [c for c in pin_contours if cv2.contourArea(c) > 50]
+        if valid_pin_contours:
+            largest_pin_contour = max(valid_pin_contours, key=cv2.contourArea)
+            # Find the bottom-most point of the pin
+            bottom_point = tuple(largest_pin_contour[largest_pin_contour[:, :, 1].argmax()][0])
+            target_point = (int(bottom_point[0]), int(bottom_point[1]))
+
     best_contour = None
     best_score = float('inf')
 
@@ -47,16 +69,21 @@ def extract_building_outline(image_path: str):
         epsilon = 0.01 * cv2.arcLength(cnt, True)
         approx = cv2.approxPolyDP(cnt, epsilon, True)
 
+        is_inside = cv2.pointPolygonTest(approx, target_point, False) >= 0
+
         M = cv2.moments(cnt)
         if M['m00'] != 0:
             cx = int(M['m10']/M['m00'])
             cy = int(M['m01']/M['m00'])
 
-            # Distance to center
-            dist = np.sqrt((cx - center[0])**2 + (cy - center[1])**2)
+            # Distance to target point
+            dist = np.sqrt((cx - target_point[0])**2 + (cy - target_point[1])**2)
 
-            # Score favors closeness to center and area
-            score = dist / np.sqrt(area)
+            if is_inside:
+                score = -1000000 + dist  # Strongly prefer contours that contain the pin
+            else:
+                score = dist / np.sqrt(area)
+
             if score < best_score:
                 best_score = score
                 best_contour = approx

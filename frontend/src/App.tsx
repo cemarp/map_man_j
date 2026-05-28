@@ -64,6 +64,7 @@ export default function App() {
   const [indoorHumidity, setIndoorHumidity] = useState(50)
   const [outdoorSummerTemp, setOutdoorSummerTemp] = useState(95)
   const [outdoorWinterTemp, setOutdoorWinterTemp] = useState(30)
+  const [outdoorHumidity, setOutdoorHumidity] = useState(50)
 
   const svgRef = useRef<SVGSVGElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -90,6 +91,7 @@ export default function App() {
       setPolygon(resData.polygon)
       setOutdoorSummerTemp(resData.climate.summer_design_temp)
       setOutdoorWinterTemp(resData.climate.winter_design_temp)
+      setOutdoorHumidity(resData.climate.outdoor_humidity)
       setRValues({
         wall: resData.defaults.wall_r_value,
         roof: resData.defaults.roof_r_value
@@ -229,9 +231,29 @@ export default function App() {
       return sum + (area * d.uValue * dtCooling)
     }, 0)
 
-    const internalCool = residents * 400 // Latent+Sensible roughly 400 BTU per person
+    const sensibleInternalCool = residents * 230
 
-    const totalCooling = sensibleWallCool + sensibleRoofCool + sensibleWindowCool + sensibleDoorCool + internalCool
+    const totalSensibleCooling = sensibleWallCool + sensibleRoofCool + sensibleWindowCool + sensibleDoorCool + sensibleInternalCool
+
+    // Latent Cooling Load
+    // Rough estimate based on infiltration and occupant moisture
+    // People: ~200 BTU/h latent per person
+    const latentInternalCool = residents * 200
+    // Infiltration latent load: volume * air changes * moisture difference
+    const volume = geom.area * houseHeight * (secondStory ? 2 : 1)
+    const ach = 0.5 // assumption
+
+    // Convert humidity to grains of moisture difference
+    // Simple estimation: 1 grain = ~0.00014 lbs water. 1 BTU evaporates ~0.001 lbs water.
+    // We'll use a simplified formula where humidity difference directly impacts latent load
+    const humDiff = Math.max(0, outdoorHumidity - indoorHumidity)
+    // 0.68 is a common factor for latent load calculation: 0.68 * CFM * delta Grains
+    // Assuming delta Grains is proportional to relative humidity diff for simplicity in this model
+    const cfm = (volume * ach) / 60
+    const latentInfiltrationCool = cfm * 0.68 * (humDiff * 0.5) // Rough approximation of grains from RH diff
+
+    const totalLatentCooling = latentInternalCool + latentInfiltrationCool
+    const totalCooling = totalSensibleCooling + totalLatentCooling
 
     // Heating (BTU/h)
     const heatWall = netWallArea * wallU * dtHeating
@@ -251,6 +273,8 @@ export default function App() {
 
     return {
       cooling: Math.round(totalCooling),
+      coolingSensible: Math.round(totalSensibleCooling),
+      coolingLatent: Math.round(totalLatentCooling),
       heating: Math.round(totalHeating),
       tons: (totalCooling / 12000).toFixed(1)
     }
@@ -275,7 +299,8 @@ export default function App() {
         indoorWinterTemp,
         indoorHumidity,
         outdoorSummerTemp,
-        outdoorWinterTemp
+        outdoorWinterTemp,
+        outdoorHumidity
       },
       calculation: {
         geometry: geom,
@@ -310,6 +335,7 @@ export default function App() {
           setIndoorHumidity(imported.state.indoorHumidity)
           if (imported.state.outdoorSummerTemp !== undefined) setOutdoorSummerTemp(imported.state.outdoorSummerTemp)
           if (imported.state.outdoorWinterTemp !== undefined) setOutdoorWinterTemp(imported.state.outdoorWinterTemp)
+          if (imported.state.outdoorHumidity !== undefined) setOutdoorHumidity(imported.state.outdoorHumidity)
         }
       } catch (err) {
         alert("Failed to parse JSON")
@@ -452,8 +478,8 @@ export default function App() {
                       <input type="number" step="0.1" className="w-full p-1 border rounded" value={outdoorWinterTemp} onChange={e => setOutdoorWinterTemp(Number(e.target.value))} />
                     </div>
                     <div>
-                      <span className="text-gray-500 block mb-1">Outdoor Humidity</span>
-                      <span className="font-medium">{data.climate.outdoor_humidity}%</span>
+                      <span className="text-gray-500 block mb-1">Outdoor Humidity (%)</span>
+                      <input type="number" className="w-full p-1 border rounded font-medium" value={outdoorHumidity} onChange={e => setOutdoorHumidity(Number(e.target.value))} />
                     </div>
                   </div>
 
@@ -489,9 +515,19 @@ export default function App() {
                 <h2 className="text-lg font-semibold text-emerald-900 mb-4">Manual J Estimate</h2>
                 {loads && (
                   <div className="space-y-3">
-                    <div className="flex justify-between items-center bg-white/60 p-3 rounded">
-                      <span className="text-emerald-800">Cooling Load</span>
-                      <span className="font-bold text-lg">{loads.cooling.toLocaleString()} BTU/h</span>
+                    <div className="bg-white/60 p-3 rounded">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-emerald-800 font-semibold">Cooling Load</span>
+                        <span className="font-bold text-lg">{loads.cooling.toLocaleString()} BTU/h</span>
+                      </div>
+                      <div className="flex justify-between items-center text-sm text-emerald-700 pl-4 border-l-2 border-emerald-200">
+                        <span>Sensible</span>
+                        <span>{loads.coolingSensible.toLocaleString()} BTU/h</span>
+                      </div>
+                      <div className="flex justify-between items-center text-sm text-emerald-700 pl-4 border-l-2 border-emerald-200">
+                        <span>Latent</span>
+                        <span>{loads.coolingLatent.toLocaleString()} BTU/h</span>
+                      </div>
                     </div>
                     <div className="flex justify-between items-center bg-white/60 p-3 rounded">
                       <span className="text-emerald-800">Heating Load</span>
