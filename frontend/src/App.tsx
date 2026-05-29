@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import WindowsDoors from './WindowsDoors'
 import type { WindowEntry, DoorEntry } from './types'
+import { captureMapCanvas } from './MapCapture'
+import { extractBuildingOutline, getScaleFromLatZoom } from './cvEngine'
 
 type Point = { x: number, y: number }
 
@@ -72,6 +74,44 @@ export default function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
+  const [cvLoaded, setCvLoaded] = useState(false)
+  const [cvLoading, setCvLoading] = useState(false)
+
+  // Dynamically load OpenCV.js inside the browser (Strict Mode safe)
+  useEffect(() => {
+    if ((window as any).cv) {
+      setCvLoaded(true)
+      return
+    }
+
+    const existingScript = document.getElementById('opencv-script')
+    if (existingScript) {
+      console.log("OpenCV script tag already exists in DOM.")
+      return
+    }
+
+    console.log("Setting up OpenCV Module hook and loading script...")
+    const Module = {
+      onRuntimeInitialized: () => {
+        console.log("OpenCV.js runtime initialized in browser!")
+        setCvLoaded(true)
+      }
+    };
+    (window as any).Module = Module;
+
+    const script = document.createElement('script')
+    script.id = 'opencv-script'
+    script.src = '/opencv.js'
+    script.async = true
+    script.onload = () => {
+      console.log("OpenCV.js script element loaded successfully")
+    }
+    script.onerror = () => {
+      console.error("Failed to load OpenCV.js script")
+    }
+    document.body.appendChild(script)
+  }, [])
+
   // Auto-center viewport on the extracted polygon
   useEffect(() => {
     if (data && containerRef.current) {
@@ -95,37 +135,114 @@ export default function App() {
     }
   }, [data])
 
+  const parseLatLong = (targetUrl: string) => {
+    const decoded = decodeURIComponent(targetUrl)
+
+    // Try finding coordinates inside path segments first: !3d(lat)!4d(lng)
+    let match = decoded.match(/!3d([-\d.]+)!4d([-\d.]+)/)
+    if (match) {
+      let zoom = 19
+      const zoomMatch = decoded.match(/@([-\d.]+),([-\d.]+),([-\d.]+)z/)
+      if (zoomMatch) {
+        zoom = parseFloat(zoomMatch[3])
+      }
+      return { lat: parseFloat(match[1]), lng: parseFloat(match[2]), zoom }
+    }
+
+    // Try finding zoom first: @lat,lng,zoomz
+    match = decoded.match(/@([-\d.]+),([-\d.]+),([-\d.]+)z/)
+    if (match) {
+      return { lat: parseFloat(match[1]), lng: parseFloat(match[2]), zoom: parseFloat(match[3]) }
+    }
+
+    // Try @lat,lng
+    match = decoded.match(/@([-\d.]+),([-\d.]+)/)
+    if (match) {
+      return { lat: parseFloat(match[1]), lng: parseFloat(match[2]), zoom: 19 }
+    }
+
+    return { lat: null, lng: null, zoom: 19 }
+  }
+
   const handleExtract = async () => {
     if (!url) return
+    if (!cvLoaded) {
+      setError("OpenCV.js is still loading in the browser. Please wait a few seconds and try again.")
+      return
+    }
     setLoading(true)
     setError("")
 
     try {
-      const res = await fetch("http://localhost:8000/extract", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url })
-      })
-
-      if (!res.ok) {
-        const d = await res.json()
-        throw new Error(d.detail || "Extraction failed")
+      const { lat, lng, zoom } = parseLatLong(url)
+      if (lat === null || lng === null) {
+        throw new Error("Could not parse coordinates from the pasted Google Maps URL. Please check the link and try again.")
       }
 
-      const resData = await res.json()
-      setData(resData)
-      setPolygon(resData.polygon)
-      setOutdoorSummerTemp(resData.climate.summer_design_temp)
-      setOutdoorWinterTemp(resData.climate.winter_design_temp)
-      setOutdoorHumidity(resData.climate.outdoor_humidity)
+      console.log(`Parsed coordinates: lat=${lat}, lng=${lng}, zoom=${zoom}`)
+
+      // 1. Capture Map & Satellite canvasses locally in the browser
+      console.log("Rendering and capturing standard Map tile layer...")
+      const mapCanvas = await captureMapCanvas(lat, lng, zoom, false)
+
+      console.log("Rendering and capturing Satellite tile layer...")
+      const satCanvas = await captureMapCanvas(lat, lng, zoom, true)
+
+      // 2. Convert captured canvasses to Base64 Data URLs
+      const imageUrl = mapCanvas.toDataURL('image/png')
+      const satImageUrl = satCanvas.toDataURL('image/png')
+
+      // 3. Extract building outline polygon from the Map canvas in-browser via OpenCV.js
+      console.log("Processing standard map canvas via in-browser OpenCV.js engine...")
+      const { polygon: extractedPolygon, area, perimeter } = extractBuildingOutline(mapCanvas)
+
+      // 4. Calculate local scale from latitude and zoom
+      const scale = getScaleFromLatZoom(lat, zoom)
+
+      // 5. Query fast, lightweight metadata endpoint on backend to fetch climate & defaults
+      const metadataRes = await fetch(`http://localhost:8000/metadata?lat=${lat}&lng=${lng}&zoom=${zoom}`)
+      if (!metadataRes.ok) {
+        throw new Error("Failed to load climate metadata from backend")
+      }
+      const metadata = await metadataRes.json()
+
+      // 6. Set active states
+      const responseData: ExtractionData = {
+        lat,
+        lng,
+        image_url: imageUrl,
+        sat_image_url: satImageUrl,
+        polygon: extractedPolygon,
+        pixel_area: area,
+        pixel_perimeter: perimeter,
+        scale,
+        climate: {
+          summer_design_temp: metadata.climate.summer_design_temp,
+          winter_design_temp: metadata.climate.winter_design_temp,
+          outdoor_humidity: metadata.climate.outdoor_humidity
+        },
+        defaults: {
+          year_built: metadata.defaults.year_built,
+          wall_r_value: metadata.defaults.wall_r_value,
+          roof_r_value: metadata.defaults.roof_r_value,
+          window_u_factor: metadata.defaults.window_u_factor
+        }
+      }
+
+      setData(responseData)
+      setPolygon(extractedPolygon)
+      setOutdoorSummerTemp(metadata.climate.summer_design_temp)
+      setOutdoorWinterTemp(metadata.climate.winter_design_temp)
+      setOutdoorHumidity(metadata.climate.outdoor_humidity)
       setRValues({
-        wall: resData.defaults.wall_r_value,
-        roof: resData.defaults.roof_r_value
+        wall: metadata.defaults.wall_r_value,
+        roof: metadata.defaults.roof_r_value
       })
-      // Update window defaults if we fetch them
-      setWindows(prev => prev.map(w => ({ ...w, uValue: resData.defaults.window_u_factor })))
+      setWindows(prev => prev.map(w => ({ ...w, uValue: metadata.defaults.window_u_factor })))
+
     } catch (err: any) {
-      setError(err.message)
+      console.error(err)
+      setError(err.message || "Failed to extract map outline")
     } finally {
       setLoading(false)
     }
@@ -427,7 +544,7 @@ export default function App() {
               <div ref={containerRef} className="border rounded-lg overflow-auto select-none bg-gray-100" style={{height: "600px"}}>
                 <div className="relative w-[3000px] h-[2000px]">
                   <img
-                    src={`http://localhost:8000${showSatellite && data.sat_image_url ? data.sat_image_url : data.image_url}`}
+                    src={showSatellite && data.sat_image_url ? data.sat_image_url : data.image_url}
                     alt="Map Capture"
                     className="absolute inset-0 w-full h-full object-cover"
                     draggable={false}
