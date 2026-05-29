@@ -64,7 +64,7 @@ async def extract_geometry(data: MapURL):
 
     try:
         polygon, area, perimeter = extract_building_outline(filepath)
-        # Scale down points to 1280x800 space since Playwright used device_scale_factor=2
+        # Scale down points to 3000x2000 space since Playwright used device_scale_factor=2
         polygon = [{"x": int(p["x"] / 2), "y": int(p["y"] / 2)} for p in polygon]
 
         scale = get_scale_from_lat_zoom(lat, zoom, device_scale_factor=1)

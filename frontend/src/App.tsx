@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import WindowsDoors from './WindowsDoors'
 import type { WindowEntry, DoorEntry } from './types'
 
@@ -70,6 +70,30 @@ export default function App() {
 
   const svgRef = useRef<SVGSVGElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // Auto-center viewport on the extracted polygon
+  useEffect(() => {
+    if (data && containerRef.current) {
+      let targetX = 1500
+      let targetY = 1000
+
+      if (data.polygon && data.polygon.length > 0) {
+        const xs = data.polygon.map(p => p.x)
+        const ys = data.polygon.map(p => p.y)
+        const minX = Math.min(...xs)
+        const maxX = Math.max(...xs)
+        const minY = Math.min(...ys)
+        const maxY = Math.max(...ys)
+        targetX = minX + (maxX - minX) / 2
+        targetY = minY + (maxY - minY) / 2
+      }
+
+      const container = containerRef.current
+      container.scrollLeft = targetX - container.clientWidth / 2
+      container.scrollTop = targetY - container.clientHeight / 2
+    }
+  }, [data])
 
   const handleExtract = async () => {
     if (!url) return
@@ -159,8 +183,8 @@ export default function App() {
     const svgP = pt.matrixTransform(svg.getScreenCTM()?.inverse())
 
     // Constrain points to bounds
-    const boundedX = Math.max(0, Math.min(1280, svgP.x))
-    const boundedY = Math.max(0, Math.min(800, svgP.y))
+    const boundedX = Math.max(0, Math.min(3000, svgP.x))
+    const boundedY = Math.max(0, Math.min(2000, svgP.y))
 
     setPolygon(prev => {
       const next = [...prev]
@@ -400,12 +424,12 @@ export default function App() {
               </div>
               <p className="text-sm text-gray-500 mb-4">Drag the points to align perfectly with the building outline. Click on the map to add new points, or right-click a point to delete it.</p>
 
-              <div className="border rounded-lg overflow-auto select-none bg-gray-100" style={{height: "600px"}}>
-                <div className="relative w-[1280px] h-[800px]">
+              <div ref={containerRef} className="border rounded-lg overflow-auto select-none bg-gray-100" style={{height: "600px"}}>
+                <div className="relative w-[3000px] h-[2000px]">
                   <img
                     src={`http://localhost:8000${showSatellite && data.sat_image_url ? data.sat_image_url : data.image_url}`}
                     alt="Map Capture"
-                    className="absolute inset-0 w-full h-full object-none object-left-top"
+                    className="absolute inset-0 w-full h-full object-cover"
                     draggable={false}
                   />
                   {/* SVG Overlay for editing the polygon */}

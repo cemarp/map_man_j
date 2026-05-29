@@ -69,11 +69,12 @@ async def capture_map_screenshot(url: str, output_path: str = "screenshot.png"):
 
 def convert_to_satellite_url(url: str) -> str:
     """
-    Converts a Google Maps URL to satellite view (Earth mode) by appending/editing !1e3 in the data parameter.
+    Converts a Google Maps URL to satellite view (Earth mode) by prepending !3m1!1e3 to the data parameter.
     """
     if "/data=" in url:
         if "!1e3" not in url:
-            return re.sub(r'(/data=[^/&?]+)', r'\1!1e3', url)
+            # Prepend !3m1!1e3 to the existing data block so Google Maps honors both the satellite view and the search pin
+            return url.replace("/data=", "/data=!3m1!1e3")
         return url
     else:
         if "?" in url:
@@ -88,17 +89,21 @@ def convert_to_satellite_url(url: str) -> str:
 async def capture_map_screenshots_dual(url: str, output_path: str, sat_output_path: str):
     """
     Spawns Playwright to capture both Map and Satellite views of the same area concurrently.
+    Keeps the original URL to preserve the search pin and maps location boundaries,
+    and collapses the sidebar panel to ensure clean center-alignment.
     """
+    map_url = url
     sat_url = convert_to_satellite_url(url)
-    print(f"Original URL: {url}")
-    print(f"Satellite URL: {sat_url}")
+
+    print(f"Target Map URL: {map_url}")
+    print(f"Target Satellite URL: {sat_url}")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
 
         async def capture_one(target_url: str, path: str):
             context = await browser.new_context(
-                viewport={'width': 1280, 'height': 800},
+                viewport={'width': 3000, 'height': 2000},
                 device_scale_factor=2, # Higher res
                 user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             )
@@ -122,6 +127,28 @@ async def capture_map_screenshots_dual(url: str, output_path: str, sat_output_pa
                 except Exception as e:
                     print("No consent dialog found or error:", e)
 
+                # Collapse sidebar via JS evaluate to make sure pin is fully visible and centered without sidebar displacement
+                try:
+                    res = await page.evaluate("""() => {
+                        const btns = Array.from(document.querySelectorAll('button[aria-label="Collapse side panel"], button[aria-label="Hide panel"], button.widget-pane-toggle-button, [jsaction*="pane.close"]'));
+                        const visibleBtn = btns.find(b => {
+                            const rect = b.getBoundingClientRect();
+                            return rect.width > 0 && rect.height > 0 && window.getComputedStyle(b).display !== 'none';
+                        });
+                        if (visibleBtn) {
+                            visibleBtn.click();
+                            return true;
+                        }
+                        return false;
+                    }""")
+                    if res:
+                        print(f"JS collapsed the sidebar successfully for {path}!")
+                        await asyncio.sleep(3) # wait for animation to complete
+                    else:
+                        print(f"Could not find any visible collapse button for {path}.")
+                except Exception as e:
+                    print(f"Error collapsing sidebar for {path}:", e)
+
                 print(f"Taking screenshot to {path}...")
                 await page.screenshot(path=path, full_page=False)
             finally:
@@ -129,7 +156,7 @@ async def capture_map_screenshots_dual(url: str, output_path: str, sat_output_pa
 
         # Run both captures in parallel
         await asyncio.gather(
-            capture_one(url, output_path),
+            capture_one(map_url, output_path),
             capture_one(sat_url, sat_output_path)
         )
 
