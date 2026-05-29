@@ -79,25 +79,48 @@ export default function App() {
 
   // Dynamically load OpenCV.js inside the browser (Strict Mode safe)
   useEffect(() => {
+    // 1. If already fully loaded
     if ((window as any).cv) {
       setCvLoaded(true)
       return
     }
 
-    const existingScript = document.getElementById('opencv-script')
-    if (existingScript) {
-      console.log("OpenCV script tag already exists in DOM.")
+    // Initialize global status objects
+    (window as any).cvLoadedStatus = (window as any).cvLoadedStatus || 'not_started';
+    (window as any).cvListeners = (window as any).cvListeners || [];
+
+    if ((window as any).cvLoadedStatus === 'loaded') {
+      setCvLoaded(true)
       return
     }
 
-    console.log("Setting up OpenCV Module hook and loading script...")
+    // Subscribe current setCvLoaded callback
+    const listener = () => setCvLoaded(true)
+    ;(window as any).cvListeners.push(listener)
+
+    if ((window as any).cvLoadedStatus === 'loading') {
+      console.log("OpenCV.js script is already loading. Subscribed to load callback.")
+      return () => {
+        // Cleanup listener if component unmounts
+        (window as any).cvListeners = ((window as any).cvListeners || []).filter((l: any) => l !== listener)
+      }
+    }
+
+    // Otherwise, we are the one initiating the load
+    console.log("Setting up OpenCV Module hook and initiating load...")
+    ;(window as any).cvLoadedStatus = 'loading'
+
     const Module = {
       onRuntimeInitialized: () => {
         console.log("OpenCV.js runtime initialized in browser!")
-        setCvLoaded(true)
+        ;(window as any).cvLoadedStatus = 'loaded'
+        // Call all subscribers
+        const listeners = (window as any).cvListeners || []
+        listeners.forEach((l: any) => l())
+        ;(window as any).cvListeners = []
       }
     };
-    (window as any).Module = Module;
+    (window as any).Module = Module
 
     const script = document.createElement('script')
     script.id = 'opencv-script'
@@ -108,8 +131,14 @@ export default function App() {
     }
     script.onerror = () => {
       console.error("Failed to load OpenCV.js script")
+      ;(window as any).cvLoadedStatus = 'error'
     }
     document.body.appendChild(script)
+
+    return () => {
+      // Cleanup listener if component unmounts
+      (window as any).cvListeners = ((window as any).cvListeners || []).filter((l: any) => l !== listener)
+    }
   }, [])
 
   // Auto-center viewport on the extracted polygon
