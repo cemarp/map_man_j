@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 import os
 import uuid
 
-from capture import parse_lat_long, capture_map_screenshot, MapURL
+from capture import parse_lat_long, capture_map_screenshots_dual, MapURL
 from cv_extract import extract_building_outline, get_scale_from_lat_zoom
 from climate import get_climate_data, get_property_defaults
 
@@ -38,6 +38,7 @@ class ExtractionResponse(BaseModel):
     lat: float
     lng: float
     image_url: str
+    sat_image_url: str
     polygon: List[Dict[str, int]]
     pixel_area: float
     pixel_perimeter: float
@@ -54,11 +55,12 @@ async def extract_geometry(data: MapURL):
 
     image_id = str(uuid.uuid4())
     filepath = f"images/{image_id}.png"
+    sat_filepath = f"images/{image_id}_sat.png"
 
     try:
-        await capture_map_screenshot(data.url, filepath)
+        await capture_map_screenshots_dual(data.url, filepath, sat_filepath)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to capture screenshot: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to capture screenshots: {str(e)}")
 
     try:
         polygon, area, perimeter = extract_building_outline(filepath)
@@ -82,6 +84,7 @@ async def extract_geometry(data: MapURL):
         lat=lat,
         lng=lng,
         image_url=f"/images/{image_id}.png",
+        sat_image_url=f"/images/{image_id}_sat.png",
         polygon=polygon,
         pixel_area=area,
         pixel_perimeter=perimeter,

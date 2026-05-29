@@ -8,6 +8,7 @@ type ExtractionData = {
   lat: number
   lng: number
   image_url: string
+  sat_image_url: string
   polygon: Point[]
   pixel_area: number
   pixel_perimeter: number
@@ -30,6 +31,7 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [data, setData] = useState<ExtractionData | null>(null)
+  const [showSatellite, setShowSatellite] = useState(false)
 
   // User adjustable values
   const [polygon, setPolygon] = useState<Point[]>([])
@@ -381,13 +383,27 @@ export default function App() {
 
             {/* Left Column: Image Map Editor */}
             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col">
-              <h2 className="text-lg font-semibold mb-2">Refine Footprint</h2>
+              <div className="flex justify-between items-center mb-2">
+                <h2 className="text-lg font-semibold">Refine Footprint</h2>
+                <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200">
+                  <input
+                    type="checkbox"
+                    id="showSatellite"
+                    checked={showSatellite}
+                    onChange={e => setShowSatellite(e.target.checked)}
+                    className="w-4 h-4 cursor-pointer"
+                  />
+                  <label htmlFor="showSatellite" className="text-sm font-semibold cursor-pointer text-gray-700 select-none">
+                    Show Satellite View
+                  </label>
+                </div>
+              </div>
               <p className="text-sm text-gray-500 mb-4">Drag the points to align perfectly with the building outline. Click on the map to add new points, or right-click a point to delete it.</p>
 
               <div className="border rounded-lg overflow-auto select-none bg-gray-100" style={{height: "600px"}}>
                 <div className="relative w-[3000px] h-[2000px]">
                   <img
-                    src={`http://localhost:8000${data.image_url}`}
+                    src={`http://localhost:8000${showSatellite && data.sat_image_url ? data.sat_image_url : data.image_url}`}
                     alt="Map Capture"
                     className="absolute inset-0 w-full h-full object-none object-left-top"
                     draggable={false}
