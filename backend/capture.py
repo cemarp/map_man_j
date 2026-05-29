@@ -34,7 +34,7 @@ async def capture_map_screenshot(url: str, output_path: str = "screenshot.png"):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
-            viewport={'width': 1280, 'height': 800},
+            viewport={'width': 3000, 'height': 2000},
             device_scale_factor=2, # Higher res
             user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         )

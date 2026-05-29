@@ -384,25 +384,26 @@ export default function App() {
               <h2 className="text-lg font-semibold mb-2">Refine Footprint</h2>
               <p className="text-sm text-gray-500 mb-4">Drag the points to align perfectly with the building outline. Click on the map to add new points, or right-click a point to delete it.</p>
 
-              <div className="relative border rounded-lg overflow-hidden flex-1 select-none flex items-center justify-center bg-gray-100" style={{minHeight: 400}}>
-                <img
-                  src={`http://localhost:8000${data.image_url}`}
-                  alt="Map Capture"
-                  className="absolute inset-0 w-full h-full object-cover"
-                  draggable={false}
-                />
-                {/* SVG Overlay for editing the polygon */}
-                <svg
-                  ref={svgRef}
-                  className="absolute inset-0 w-full h-full z-10"
-                  onPointerMove={handlePointerMove}
-                  onPointerUp={handlePointerUp}
-                  onPointerLeave={handlePointerUp}
-                  onClick={handleSvgClick}
-                  onContextMenu={(e) => e.preventDefault()}
-                  viewBox="0 0 1280 800" // Assuming the playwright capture resolution
-                  preserveAspectRatio="xMidYMid slice"
-                >
+              <div className="border rounded-lg overflow-auto select-none bg-gray-100" style={{height: "600px"}}>
+                <div className="relative w-[3000px] h-[2000px]">
+                  <img
+                    src={`http://localhost:8000${data.image_url}`}
+                    alt="Map Capture"
+                    className="absolute inset-0 w-full h-full object-none object-left-top"
+                    draggable={false}
+                  />
+                  {/* SVG Overlay for editing the polygon */}
+                  <svg
+                    ref={svgRef}
+                    className="absolute inset-0 w-full h-full z-10"
+                    onPointerMove={handlePointerMove}
+                    onPointerUp={handlePointerUp}
+                    onPointerLeave={handlePointerUp}
+                    onClick={handleSvgClick}
+                    onContextMenu={(e) => e.preventDefault()}
+                    viewBox="0 0 3000 2000"
+                    preserveAspectRatio="xMidYMid meet"
+                  >
                   <polygon
                     points={polyStr}
                     fill="rgba(59, 130, 246, 0.3)"
@@ -423,6 +424,7 @@ export default function App() {
                     />
                   ))}
                 </svg>
+                </div>
               </div>
 
               <div className="mt-4 grid grid-cols-2 gap-4 text-sm">

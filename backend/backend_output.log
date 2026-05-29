@@ -1,0 +1,13 @@
+INFO:     Started server process [657536]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+ERROR:    [Errno 98] error while attempting to bind on address ('0.0.0.0INFO:     127.0.0.1:34338 - "OPTIONS /extract HTTP/1.1" 200 OK
+Waiting for maps to load...
+Taking screenshot...
+INFO:     127.0.0.1:34344 - "POST /extract HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35624 - "GET /images/65a41613-9a6b-4c27-976b-57ceacc2893d.png HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60152 - "OPTIONS /extract HTTP/1.1" 200 OK
+Waiting for maps to load...
+Taking screenshot...
+INFO:     127.0.0.1:60154 - "POST /extract HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56610 - "GET /images/e14da2ce-7820-4703-87f0-01055cc8620d.png HTTP/1.1" 200 OK

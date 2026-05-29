@@ -7,7 +7,7 @@ def verify_frontend():
         page = browser.new_page(viewport={"width": 1280, "height": 1000})
 
         # Go to frontend
-        page.goto("http://localhost:5173")
+        page.goto("http://localhost:3000")
         page.wait_for_load_state("networkidle")
 
         # Test input URL
