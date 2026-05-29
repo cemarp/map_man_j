@@ -77,6 +77,7 @@ export default function App() {
   const [cvLoaded, setCvLoaded] = useState(false)
   const [cvLoading, setCvLoading] = useState(false)
   const [selectedNode, setSelectedNode] = useState<number | null>(null)
+  const [zoomScale, setZoomScale] = useState(1.0)
 
   // Dynamically load OpenCV.js inside the browser (Strict Mode safe)
   useEffect(() => {
@@ -206,10 +207,10 @@ export default function App() {
       }
 
       const container = containerRef.current
-      container.scrollLeft = targetX - container.clientWidth / 2
-      container.scrollTop = targetY - container.clientHeight / 2
+      container.scrollLeft = (targetX * zoomScale) - container.clientWidth / 2
+      container.scrollTop = (targetY * zoomScale) - container.clientHeight / 2
     }
-  }, [data])
+  }, [data, zoomScale])
 
   const parseLatLong = (targetUrl: string) => {
     const decoded = decodeURIComponent(targetUrl)
@@ -611,19 +612,50 @@ export default function App() {
 
             {/* Left Column: Image Map Editor */}
             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col">
-              <div className="flex justify-between items-center mb-2">
+              <div className="flex justify-between items-center mb-2 flex-wrap gap-2">
                 <h2 className="text-lg font-semibold">Refine Footprint</h2>
-                <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200">
-                  <input
-                    type="checkbox"
-                    id="showSatellite"
-                    checked={showSatellite}
-                    onChange={e => setShowSatellite(e.target.checked)}
-                    className="w-4 h-4 cursor-pointer"
-                  />
-                  <label htmlFor="showSatellite" className="text-sm font-semibold cursor-pointer text-gray-700 select-none">
-                    Show Satellite View
-                  </label>
+                <div className="flex items-center gap-3 flex-wrap">
+                  {/* Premium Zoom Control Bar */}
+                  <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200">
+                    <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider select-none mr-1">Zoom</span>
+                    <button
+                      onClick={() => setZoomScale(z => Math.max(0.25, z - 0.25))}
+                      className="w-7 h-7 flex items-center justify-center border rounded bg-white hover:bg-gray-50 text-gray-600 font-bold select-none text-sm shadow-sm transition-colors"
+                      title="Zoom Out"
+                    >
+                      -
+                    </button>
+                    <span className="text-xs font-semibold text-gray-700 w-12 text-center select-none font-mono">
+                      {Math.round(zoomScale * 100)}%
+                    </span>
+                    <button
+                      onClick={() => setZoomScale(z => Math.min(3.0, z + 0.25))}
+                      className="w-7 h-7 flex items-center justify-center border rounded bg-white hover:bg-gray-50 text-gray-600 font-bold select-none text-sm shadow-sm transition-colors"
+                      title="Zoom In"
+                    >
+                      +
+                    </button>
+                    <button
+                      onClick={() => setZoomScale(1.0)}
+                      className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50 text-gray-500 font-medium select-none shadow-sm ml-1 transition-colors"
+                      title="Reset Zoom"
+                    >
+                      Reset
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200">
+                    <input
+                      type="checkbox"
+                      id="showSatellite"
+                      checked={showSatellite}
+                      onChange={e => setShowSatellite(e.target.checked)}
+                      className="w-4 h-4 cursor-pointer"
+                    />
+                    <label htmlFor="showSatellite" className="text-sm font-semibold cursor-pointer text-gray-700 select-none">
+                      Show Satellite View
+                    </label>
+                  </div>
                 </div>
               </div>
               <p className="text-sm text-gray-500 mb-4">
@@ -631,13 +663,14 @@ export default function App() {
               </p>
 
               <div ref={containerRef} className="border rounded-lg overflow-auto select-none bg-gray-100" style={{height: "600px"}}>
-                <div className="relative w-[3000px] h-[2000px]">
-                  <img
-                    src={showSatellite && data.sat_image_url ? data.sat_image_url : data.image_url}
-                    alt="Map Capture"
-                    className="absolute inset-0 w-full h-full object-cover"
-                    draggable={false}
-                  />
+                <div style={{ width: `${3000 * zoomScale}px`, height: `${2000 * zoomScale}px`, overflow: 'hidden' }}>
+                  <div className="relative w-[3000px] h-[2000px]" style={{ transform: `scale(${zoomScale})`, transformOrigin: 'top left' }}>
+                    <img
+                      src={showSatellite && data.sat_image_url ? data.sat_image_url : data.image_url}
+                      alt="Map Capture"
+                      className="absolute inset-0 w-full h-full object-cover"
+                      draggable={false}
+                    />
                   {/* SVG Overlay for editing the polygon */}
                   <svg
                     ref={svgRef}
@@ -674,6 +707,7 @@ export default function App() {
                     />
                   ))}
                 </svg>
+                </div>
                 </div>
               </div>
 
