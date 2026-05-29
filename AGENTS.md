@@ -3,7 +3,6 @@ The task is to implement a dual-capture feature for an HVAC Manual J calculation
 
 ## Completed Work
 1. **Frontend App Updates**:
-   - Expanded image and canvas size to 3000x2000 in `frontend/src/App.tsx`.
    - Added missing inputs (skylights, duct load penalty).
    - Added a "Show Satellite View" checkbox toggle that conditionally renders `data.sat_image_url` if checked.
 2. **Backend Capture Updates**:
@@ -14,6 +13,8 @@ The task is to implement a dual-capture feature for an HVAC Manual J calculation
    - Updated `ExtractionResponse` to include `sat_image_url`.
    - Updated the `/extract` endpoint in `backend/main.py` to call `capture_map_screenshots_dual` and return both `image_url` and `sat_image_url`.
 
+## Refinements based on review:
+- Reverted the viewport changes from 3000x2000 back to 1280x800. Expanding the playwright viewport to 3000x2000 caused Google Maps to compute its view boundary differently resulting in the target coordinates/building no longer being perfectly centered and inside the screenshot bounds. Both backend playwright contexts, api response normalizers, and frontend image container dimensions have been restored to 1280x800.
+
 ## Remaining Tasks / Blockers
 - None! All tasks are fully implemented, verified via visual E2E playwright testing, and completely resolved.
-- Ready for final review.

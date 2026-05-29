@@ -401,7 +401,7 @@ export default function App() {
               <p className="text-sm text-gray-500 mb-4">Drag the points to align perfectly with the building outline. Click on the map to add new points, or right-click a point to delete it.</p>
 
               <div className="border rounded-lg overflow-auto select-none bg-gray-100" style={{height: "600px"}}>
-                <div className="relative w-[3000px] h-[2000px]">
+                <div className="relative w-[1280px] h-[800px]">
                   <img
                     src={`http://localhost:8000${showSatellite && data.sat_image_url ? data.sat_image_url : data.image_url}`}
                     alt="Map Capture"
