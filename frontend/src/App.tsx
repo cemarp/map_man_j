@@ -76,6 +76,7 @@ export default function App() {
 
   const [cvLoaded, setCvLoaded] = useState(false)
   const [cvLoading, setCvLoading] = useState(false)
+  const [selectedNode, setSelectedNode] = useState<number | null>(null)
 
   // Dynamically load OpenCV.js inside the browser (Strict Mode safe)
   useEffect(() => {
@@ -140,6 +141,52 @@ export default function App() {
       (window as any).cvListeners = ((window as any).cvListeners || []).filter((l: any) => l !== listener)
     }
   }, [])
+
+  // Keyboard event listener for adding and deleting polygon vertices
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (selectedNode === null || !data) return
+
+      // D, Delete, or Backspace to delete the highlighted vertex
+      if (e.key === 'Delete' || e.key === 'Backspace' || e.key.toLowerCase() === 'd') {
+        e.preventDefault()
+        if (polygon.length > 3) {
+          setPolygon(prev => {
+            const next = prev.filter((_, i) => i !== selectedNode)
+            const nextSelected = selectedNode >= next.length ? next.length - 1 : selectedNode
+            setSelectedNode(nextSelected)
+            return next
+          })
+          console.log(`Deleted vertex at index ${selectedNode}`)
+        }
+      }
+
+      // A, Insert, or N to insert a new vertex next to (after) the selected one
+      if (e.key.toLowerCase() === 'a' || e.key === 'Insert' || e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        setPolygon(prev => {
+          if (selectedNode >= prev.length) return prev
+          const currPt = prev[selectedNode]
+          const nextIdx = (selectedNode + 1) % prev.length
+          const nextPt = prev[nextIdx]
+          const midpoint = {
+            x: Math.round((currPt.x + nextPt.x) / 2),
+            y: Math.round((currPt.y + nextPt.y) / 2)
+          }
+          const next = [...prev]
+          next.splice(selectedNode + 1, 0, midpoint)
+          setSelectedNode(selectedNode + 1)
+          return next
+        })
+        console.log(`Inserted new vertex after index ${selectedNode}`)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [selectedNode, polygon.length, data])
 
   // Auto-center viewport on the extracted polygon
   useEffect(() => {
@@ -310,11 +357,17 @@ export default function App() {
       // Right click to delete vertex
       e.preventDefault()
       if (polygon.length > 3) {
-        setPolygon(prev => prev.filter((_, i) => i !== index))
+        setPolygon(prev => {
+          const next = prev.filter((_, i) => i !== index)
+          const nextSelected = index >= next.length ? next.length - 1 : index
+          setSelectedNode(nextSelected)
+          return next
+        })
       }
       return
     }
     setActiveNode(index)
+    setSelectedNode(index)
     e.currentTarget.setPointerCapture(e.pointerId)
   }
 
@@ -355,9 +408,14 @@ export default function App() {
     pt.y = e.clientY
 
     const svgP = pt.matrixTransform(svg.getScreenCTM()?.inverse())
+    const newPt = { x: Math.round(svgP.x), y: Math.round(svgP.y) }
 
-    // Add point to the end
-    setPolygon(prev => [...prev, { x: svgP.x, y: svgP.y }])
+    // Add point to the end and select it
+    setPolygon(prev => {
+      const next = [...prev, newPt]
+      setSelectedNode(next.length - 1)
+      return next
+    })
   }
 
   const polyStr = polygon.map(p => `${p.x},${p.y}`).join(" ")
@@ -568,7 +626,9 @@ export default function App() {
                   </label>
                 </div>
               </div>
-              <p className="text-sm text-gray-500 mb-4">Drag the points to align perfectly with the building outline. Click on the map to add new points, or right-click a point to delete it.</p>
+              <p className="text-sm text-gray-500 mb-4">
+                Drag points to align. Click on the map to add a point. Click a point to highlight it, then press <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">D</strong> / <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">Delete</strong> to delete it, or <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">A</strong> / <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">N</strong> to insert a new vertex next to it.
+              </p>
 
               <div ref={containerRef} className="border rounded-lg overflow-auto select-none bg-gray-100" style={{height: "600px"}}>
                 <div className="relative w-[3000px] h-[2000px]">
@@ -601,12 +661,16 @@ export default function App() {
                       key={i}
                       cx={pt.x}
                       cy={pt.y}
-                      r="6"
-                      fill="white"
-                      stroke="#2563eb"
-                      strokeWidth="2"
+                      r={selectedNode === i ? "9" : "6"}
+                      fill={selectedNode === i ? "#ea4335" : "white"}
+                      stroke={selectedNode === i ? "white" : "#2563eb"}
+                      strokeWidth={selectedNode === i ? "3" : "2"}
                       className="cursor-move"
                       onPointerDown={(e) => handlePointerDown(e, i)}
+                      style={{
+                        transition: "r 0.15s ease, fill 0.15s ease",
+                        filter: selectedNode === i ? "drop-shadow(0 0 4px rgba(234, 67, 53, 0.6))" : "none"
+                      }}
                     />
                   ))}
                 </svg>

@@ -15,6 +15,8 @@ export function extractBuildingOutline(canvas: HTMLCanvasElement): {
 
   // 1. Read image from canvas (RGBA format)
   let img = cv.imread(canvas);
+  let gray = new cv.Mat();
+  let edges = new cv.Mat();
   let hsv = new cv.Mat();
   let mask = new cv.Mat();
   let contours = new cv.MatVector();
@@ -32,10 +34,11 @@ export function extractBuildingOutline(canvas: HTMLCanvasElement): {
     const w = img.cols;
     const center = { x: Math.floor(w / 2), y: Math.floor(h / 2) };
 
-    // 2. Convert to HSV: RGBA -> RGB -> HSV
+    // 2. Convert to Grayscale & HSV
     let rgb = new cv.Mat();
     cv.cvtColor(img, rgb, cv.COLOR_RGBA2RGB);
     cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
+    cv.cvtColor(img, gray, cv.COLOR_RGBA2GRAY);
     rgb.delete();
 
     // 3. Google Maps/Leaflet grey building thresholds
@@ -46,8 +49,18 @@ export function extractBuildingOutline(canvas: HTMLCanvasElement): {
     lowerBound.delete();
     upperBound.delete();
 
-    // 4. Clean up mask via morphology
-    let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+    // Option C: Hybrid Canny Edge Separation
+    // Detect edges in grayscale space
+    cv.Canny(gray, edges, 50, 150, 3, false);
+    // Dilate edges slightly to ensure a solid separator line
+    let edgeKernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(2, 2));
+    cv.dilate(edges, edges, edgeKernel);
+    edgeKernel.delete();
+    // Subtract edges from standard mask to slice touching buildings apart
+    cv.subtract(mask, edges, mask);
+
+    // 4. Clean up mask via morphology (use smaller 3x3 kernel to preserve sliced gaps)
+    let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
     cv.morphologyEx(mask, mask, cv.MORPH_OPEN, kernel);
     cv.morphologyEx(mask, mask, cv.MORPH_CLOSE, kernel);
     kernel.delete();
@@ -196,6 +209,8 @@ export function extractBuildingOutline(canvas: HTMLCanvasElement): {
   } finally {
     // 8. CRITICAL memory cleanup for WASM runtime
     img.delete();
+    gray.delete();
+    edges.delete();
     hsv.delete();
     mask.delete();
     contours.delete();
