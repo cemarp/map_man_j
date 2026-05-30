@@ -20,5 +20,8 @@ The task is to implement a dual-capture feature for an HVAC Manual J calculation
 - Ensured a full `3000x2000` high-resolution space layout so that all lot boundaries are beautifully visible, and integrated smooth CSS layout scrolling inside the frontend Map Editor container.
 - Confirmed that toggling the "Show Satellite View" checkbox swap is fast, dynamic, and fully retains all drawn coordinates, perimeter measurements, and active scroll states.
 
+## Architecture Note
+- A previous agent completed a major frontend refactor to move the CV extraction logic from the Python backend entirely to the frontend via OpenCV.js. This was an intentional design decision requested by the user and is the accepted architecture moving forward.
+
 ## Remaining Tasks / Blockers
 - None! All tasks are fully implemented, verified via visual E2E playwright testing, and completely resolved.

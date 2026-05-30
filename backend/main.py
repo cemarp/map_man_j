@@ -47,6 +47,18 @@ class ExtractionResponse(BaseModel):
     defaults: PropertyDefaults
     message: str
 
+@app.get("/metadata")
+async def get_metadata(lat: float, lng: float, zoom: float):
+    try:
+        climate = get_climate_data(lat, lng)
+        defaults = get_property_defaults(lat, lng)
+        return {
+            "climate": climate,
+            "defaults": defaults
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/extract", response_model=ExtractionResponse)
 async def extract_geometry(data: MapURL):
     lat, lng, zoom = parse_lat_long(data.url)

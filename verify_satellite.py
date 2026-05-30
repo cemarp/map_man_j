@@ -34,7 +34,7 @@ def verify_satellite_toggle():
         # Inspect image src
         img_locator = page.locator("img[alt='Map Capture']")
         img_src = img_locator.get_attribute("src")
-        print(f"Base Map Image src: {img_src}")
+        print(f"Base Map Image src: {img_src[:100]}...")
 
         # Click the "Show Satellite View" checkbox
         print("Toggling to Satellite View...")
@@ -48,11 +48,11 @@ def verify_satellite_toggle():
 
         # Inspect satellite image src
         sat_img_src = img_locator.get_attribute("src")
-        print(f"Satellite Map Image src: {sat_img_src}")
+        print(f"Satellite Map Image src: {sat_img_src[:100]}...")
 
         # Asserts
         assert img_src != sat_img_src, "Error: Image src did not change when toggled to Satellite View!"
-        assert "_sat.png" in sat_img_src, f"Error: Satellite image src '{sat_img_src}' does not contain '_sat.png'!"
+        assert "data:image/png;base64" in sat_img_src, f"Error: Satellite image src is not a valid base64 data URL!"
         print("SUCCESS: Satellite view toggle works flawlessly! Coordinates and outlines are perfectly preserved.")
 
         browser.close()

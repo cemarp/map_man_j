@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import WindowsDoors from './WindowsDoors'
-import type { WindowEntry, DoorEntry } from './types'
+import type { WindowEntry, DoorEntry, SkylightEntry, DuctSystem, Foundation, Attic, Envelope } from './types'
+import { captureMapCanvas } from './MapCapture'
+import { extractBuildingOutline, getScaleFromLatZoom } from './cvEngine'
 
 type Point = { x: number, y: number }
 
@@ -68,9 +70,131 @@ export default function App() {
   const [outdoorWinterTemp, setOutdoorWinterTemp] = useState(30)
   const [outdoorHumidity, setOutdoorHumidity] = useState(50)
 
+  // New State variables for Manual J Enhancements
+  const [skylights, setSkylights] = useState<SkylightEntry[]>([])
+  const [ductSystem, setDuctSystem] = useState<DuctSystem>({ location: 'Conditioned Space', insulationRValue: 0, leakage: 'Tight (5%)' })
+  const [foundation, setFoundation] = useState<Foundation>({ type: 'Slab', rValue: 0 })
+  const [attic, setAttic] = useState<Attic>({ type: 'Vented', rValue: 30 })
+  const [envelope, setEnvelope] = useState<Envelope>({ tightness: 'Average', fireplaces: 0 })
+
   const svgRef = useRef<SVGSVGElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+
+  const [cvLoaded, setCvLoaded] = useState(false)
+
+  const [selectedNode, setSelectedNode] = useState<number | null>(null)
+  const [zoomScale, setZoomScale] = useState(1.0)
+
+  // Dynamically load OpenCV.js inside the browser (Strict Mode safe)
+  useEffect(() => {
+    // 1. If already fully loaded
+    if ((window as any).cv) {
+      setCvLoaded(true)
+      return
+    }
+
+    // Initialize global status objects
+    (window as any).cvLoadedStatus = (window as any).cvLoadedStatus || 'not_started';
+    (window as any).cvListeners = (window as any).cvListeners || [];
+
+    if ((window as any).cvLoadedStatus === 'loaded') {
+      setCvLoaded(true)
+      return
+    }
+
+    // Subscribe current setCvLoaded callback
+    const listener = () => setCvLoaded(true)
+    ;(window as any).cvListeners.push(listener)
+
+    if ((window as any).cvLoadedStatus === 'loading') {
+      console.log("OpenCV.js script is already loading. Subscribed to load callback.")
+      return () => {
+        // Cleanup listener if component unmounts
+        (window as any).cvListeners = ((window as any).cvListeners || []).filter((l: any) => l !== listener)
+      }
+    }
+
+    // Otherwise, we are the one initiating the load
+    console.log("Setting up OpenCV Module hook and initiating load...")
+    ;(window as any).cvLoadedStatus = 'loading'
+
+    const Module = {
+      onRuntimeInitialized: () => {
+        console.log("OpenCV.js runtime initialized in browser!")
+        ;(window as any).cvLoadedStatus = 'loaded'
+        // Call all subscribers
+        const listeners = (window as any).cvListeners || []
+        listeners.forEach((l: any) => l())
+        ;(window as any).cvListeners = []
+      }
+    };
+    (window as any).Module = Module
+
+    const script = document.createElement('script')
+    script.id = 'opencv-script'
+    script.src = '/opencv.js'
+    script.async = true
+    script.onload = () => {
+      console.log("OpenCV.js script element loaded successfully")
+    }
+    script.onerror = () => {
+      console.error("Failed to load OpenCV.js script")
+      ;(window as any).cvLoadedStatus = 'error'
+    }
+    document.body.appendChild(script)
+
+    return () => {
+      // Cleanup listener if component unmounts
+      (window as any).cvListeners = ((window as any).cvListeners || []).filter((l: any) => l !== listener)
+    }
+  }, [])
+
+  // Keyboard event listener for adding and deleting polygon vertices
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (selectedNode === null || !data) return
+
+      // D, Delete, or Backspace to delete the highlighted vertex
+      if (e.key === 'Delete' || e.key === 'Backspace' || e.key.toLowerCase() === 'd') {
+        e.preventDefault()
+        if (polygon.length > 3) {
+          setPolygon(prev => {
+            const next = prev.filter((_, i) => i !== selectedNode)
+            const nextSelected = selectedNode >= next.length ? next.length - 1 : selectedNode
+            setSelectedNode(nextSelected)
+            return next
+          })
+          console.log(`Deleted vertex at index ${selectedNode}`)
+        }
+      }
+
+      // A, Insert, or N to insert a new vertex next to (after) the selected one
+      if (e.key.toLowerCase() === 'a' || e.key === 'Insert' || e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        setPolygon(prev => {
+          if (selectedNode >= prev.length) return prev
+          const currPt = prev[selectedNode]
+          const nextIdx = (selectedNode + 1) % prev.length
+          const nextPt = prev[nextIdx]
+          const midpoint = {
+            x: Math.round((currPt.x + nextPt.x) / 2),
+            y: Math.round((currPt.y + nextPt.y) / 2)
+          }
+          const next = [...prev]
+          next.splice(selectedNode + 1, 0, midpoint)
+          setSelectedNode(selectedNode + 1)
+          return next
+        })
+        console.log(`Inserted new vertex after index ${selectedNode}`)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [selectedNode, polygon.length, data])
 
   // Auto-center viewport on the extracted polygon
   useEffect(() => {
@@ -90,42 +214,119 @@ export default function App() {
       }
 
       const container = containerRef.current
-      container.scrollLeft = targetX - container.clientWidth / 2
-      container.scrollTop = targetY - container.clientHeight / 2
+      container.scrollLeft = (targetX * zoomScale) - container.clientWidth / 2
+      container.scrollTop = (targetY * zoomScale) - container.clientHeight / 2
     }
-  }, [data])
+  }, [data, zoomScale])
+
+  const parseLatLong = (targetUrl: string) => {
+    const decoded = decodeURIComponent(targetUrl)
+
+    // Try finding coordinates inside path segments first: !3d(lat)!4d(lng)
+    let match = decoded.match(/!3d([-\d.]+)!4d([-\d.]+)/)
+    if (match) {
+      let zoom = 19
+      const zoomMatch = decoded.match(/@([-\d.]+),([-\d.]+),([-\d.]+)z/)
+      if (zoomMatch) {
+        zoom = parseFloat(zoomMatch[3])
+      }
+      return { lat: parseFloat(match[1]), lng: parseFloat(match[2]), zoom }
+    }
+
+    // Try finding zoom first: @lat,lng,zoomz
+    match = decoded.match(/@([-\d.]+),([-\d.]+),([-\d.]+)z/)
+    if (match) {
+      return { lat: parseFloat(match[1]), lng: parseFloat(match[2]), zoom: parseFloat(match[3]) }
+    }
+
+    // Try @lat,lng
+    match = decoded.match(/@([-\d.]+),([-\d.]+)/)
+    if (match) {
+      return { lat: parseFloat(match[1]), lng: parseFloat(match[2]), zoom: 19 }
+    }
+
+    return { lat: null, lng: null, zoom: 19 }
+  }
 
   const handleExtract = async () => {
     if (!url) return
+    if (!cvLoaded) {
+      setError("OpenCV.js is still loading in the browser. Please wait a few seconds and try again.")
+      return
+    }
     setLoading(true)
     setError("")
 
     try {
-      const res = await fetch("http://localhost:8000/extract", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url })
-      })
-
-      if (!res.ok) {
-        const d = await res.json()
-        throw new Error(d.detail || "Extraction failed")
+      const { lat, lng, zoom } = parseLatLong(url)
+      if (lat === null || lng === null) {
+        throw new Error("Could not parse coordinates from the pasted Google Maps URL. Please check the link and try again.")
       }
 
-      const resData = await res.json()
-      setData(resData)
-      setPolygon(resData.polygon)
-      setOutdoorSummerTemp(resData.climate.summer_design_temp)
-      setOutdoorWinterTemp(resData.climate.winter_design_temp)
-      setOutdoorHumidity(resData.climate.outdoor_humidity)
+      console.log(`Parsed coordinates: lat=${lat}, lng=${lng}, zoom=${zoom}`)
+
+      // 1. Capture Map & Satellite canvasses locally in the browser
+      console.log("Rendering and capturing standard Map tile layer...")
+      const mapCanvas = await captureMapCanvas(lat, lng, zoom, false)
+
+      console.log("Rendering and capturing Satellite tile layer...")
+      const satCanvas = await captureMapCanvas(lat, lng, zoom, true)
+
+      // 2. Convert captured canvasses to Base64 Data URLs
+      const imageUrl = mapCanvas.toDataURL('image/png')
+      const satImageUrl = satCanvas.toDataURL('image/png')
+
+      // 3. Extract building outline polygon from the Map canvas in-browser via OpenCV.js
+      console.log("Processing standard map canvas via in-browser OpenCV.js engine...")
+      const { polygon: extractedPolygon, area, perimeter } = extractBuildingOutline(mapCanvas)
+
+      // 4. Calculate local scale from latitude and zoom
+      const scale = getScaleFromLatZoom(lat, zoom)
+
+      // 5. Query fast, lightweight metadata endpoint on backend to fetch climate & defaults
+      const metadataRes = await fetch(`http://localhost:8000/metadata?lat=${lat}&lng=${lng}&zoom=${zoom}`)
+      if (!metadataRes.ok) {
+        throw new Error("Failed to load climate metadata from backend")
+      }
+      const metadata = await metadataRes.json()
+
+      // 6. Set active states
+      const responseData: ExtractionData = {
+        lat,
+        lng,
+        image_url: imageUrl,
+        sat_image_url: satImageUrl,
+        polygon: extractedPolygon,
+        pixel_area: area,
+        pixel_perimeter: perimeter,
+        scale,
+        climate: {
+          summer_design_temp: metadata.climate.summer_design_temp,
+          winter_design_temp: metadata.climate.winter_design_temp,
+          outdoor_humidity: metadata.climate.outdoor_humidity
+        },
+        defaults: {
+          year_built: metadata.defaults.year_built,
+          wall_r_value: metadata.defaults.wall_r_value,
+          roof_r_value: metadata.defaults.roof_r_value,
+          window_u_factor: metadata.defaults.window_u_factor
+        }
+      }
+
+      setData(responseData)
+      setPolygon(extractedPolygon)
+      setOutdoorSummerTemp(metadata.climate.summer_design_temp)
+      setOutdoorWinterTemp(metadata.climate.winter_design_temp)
+      setOutdoorHumidity(metadata.climate.outdoor_humidity)
       setRValues({
-        wall: resData.defaults.wall_r_value,
-        roof: resData.defaults.roof_r_value
+        wall: metadata.defaults.wall_r_value,
+        roof: metadata.defaults.roof_r_value
       })
-      // Update window defaults if we fetch them
-      setWindows(prev => prev.map(w => ({ ...w, uValue: resData.defaults.window_u_factor })))
+      setWindows(prev => prev.map(w => ({ ...w, uValue: metadata.defaults.window_u_factor })))
+
     } catch (err: any) {
-      setError(err.message)
+      console.error(err)
+      setError(err.message || "Failed to extract map outline")
     } finally {
       setLoading(false)
     }
@@ -164,11 +365,17 @@ export default function App() {
       // Right click to delete vertex
       e.preventDefault()
       if (polygon.length > 3) {
-        setPolygon(prev => prev.filter((_, i) => i !== index))
+        setPolygon(prev => {
+          const next = prev.filter((_, i) => i !== index)
+          const nextSelected = index >= next.length ? next.length - 1 : index
+          setSelectedNode(nextSelected)
+          return next
+        })
       }
       return
     }
     setActiveNode(index)
+    setSelectedNode(index)
     e.currentTarget.setPointerCapture(e.pointerId)
   }
 
@@ -209,9 +416,14 @@ export default function App() {
     pt.y = e.clientY
 
     const svgP = pt.matrixTransform(svg.getScreenCTM()?.inverse())
+    const newPt = { x: Math.round(svgP.x), y: Math.round(svgP.y) }
 
-    // Add point to the end
-    setPolygon(prev => [...prev, { x: svgP.x, y: svgP.y }])
+    // Add point to the end and select it
+    setPolygon(prev => {
+      const next = [...prev, newPt]
+      setSelectedNode(next.length - 1)
+      return next
+    })
   }
 
   const polyStr = polygon.map(p => `${p.x},${p.y}`).join(" ")
@@ -231,13 +443,36 @@ export default function App() {
     const netWallArea = Math.max(0, wallArea - windowAreaTotal - doorAreaTotal)
     const roofArea = geom.area
 
+    // Area of new elements
+    const skylightAreaTotal = skylights.reduce((sum, s) => sum + (s.width * s.height), 0)
+
+    // Adjust roof area for skylights if attic type allows (assume no attic or vented still has skylights penetrating)
+    // Here we'll just subtract it from the raw roof Area to get net
+    const netRoofArea = Math.max(0, roofArea - skylightAreaTotal)
+
     // U-values = 1/R-value
-    const wallU = 1 / rValues.wall
-    const roofU = 1 / rValues.roof
+    const wallU = rValues.wall > 0 ? 1 / rValues.wall : 0
+    const roofU = attic.rValue > 0 ? 1 / attic.rValue : (rValues.roof > 0 ? 1 / rValues.roof : 0) // Fallback for old configs
+
+    // Foundation logic
+    const foundationU = foundation.rValue > 0 ? 1 / foundation.rValue : (foundation.type === 'Slab' ? 1.5 : 0.5) // basic assumptions for uninsulated
 
     // Sensible Cooling (BTU/h) = Area * U * DT
     const sensibleWallCool = netWallArea * wallU * dtCooling
-    const sensibleRoofCool = roofArea * roofU * dtCooling
+
+    // Roof load depends on attic type
+    let sensibleRoofCool = netRoofArea * roofU * dtCooling
+    if (attic.type === 'Vented') {
+        // Vented attics get much hotter than outdoor air in summer
+        sensibleRoofCool = netRoofArea * roofU * (dtCooling + 20)
+    } else if (attic.type === 'No Attic') {
+        // Direct roof exposure, somewhat higher sol-air temp
+        sensibleRoofCool = netRoofArea * roofU * (dtCooling + 10)
+    }
+
+    const sensibleFoundationCool = foundation.type === 'Slab'
+        ? geom.perimeter * foundationU * (dtCooling * 0.5) // Edge heat transfer is mostly what matters for slab
+        : geom.area * foundationU * (dtCooling * 0.5) // Crawlspace/Basement transfers through floor
 
     // Individual Window Cooling (Sensible = U*Area*DT + Area*SHGC*HTM_Solar)
     // Simplified HTM Solar based on standard approximations
@@ -248,8 +483,26 @@ export default function App() {
       let solarFactor = 30
       if (['E', 'W'].includes(w.orientation)) solarFactor = 60
       if (['SE', 'SW', 'S'].includes(w.orientation)) solarFactor = 45
+
+      // Overhang adjustment (simplified: reduces solar gain if it has an overhang)
+      // A deeper overhang closer to the window blocks more sun.
+      if (w.overhangDepth && w.overhangDepth > 0) {
+        // Very basic shading factor: reduce solar gain by up to 50% depending on depth vs height
+        // This is a highly simplified approximation
+        let shadeFactor = Math.min(0.5, w.overhangDepth / w.height)
+        solarFactor = solarFactor * (1 - shadeFactor)
+      }
+
       const solarGain = area * w.shgc * solarFactor
       return sum + conduction + solarGain
+    }, 0)
+
+    const sensibleSkylightCool = skylights.reduce((sum, s) => {
+        const area = s.width * s.height
+        const conduction = area * s.uValue * dtCooling
+        // Skylights get direct overhead sun, so solar gain factor is high
+        const solarGain = area * s.shgc * 70
+        return sum + conduction + solarGain
     }, 0)
 
     const sensibleDoorCool = doors.reduce((sum, d) => {
@@ -259,7 +512,7 @@ export default function App() {
 
     const sensibleInternalCool = residents * 230
 
-    const totalSensibleCooling = sensibleWallCool + sensibleRoofCool + sensibleWindowCool + sensibleDoorCool + sensibleInternalCool
+    const totalSensibleCooling = sensibleWallCool + sensibleRoofCool + sensibleFoundationCool + sensibleWindowCool + sensibleSkylightCool + sensibleDoorCool + sensibleInternalCool
 
     // Latent Cooling Load
     // Rough estimate based on infiltration and occupant moisture
@@ -267,7 +520,13 @@ export default function App() {
     const latentInternalCool = residents * 200
     // Infiltration latent load: volume * air changes * moisture difference
     const volume = geom.area * houseHeight * (secondStory ? 2 : 1)
-    const ach = 0.5 // assumption
+
+    // Calculate ACH based on envelope tightness and fireplaces
+    let ach = 0.5 // Average
+    if (envelope.tightness === 'Tight') ach = 0.3
+    if (envelope.tightness === 'Loose') ach = 0.8
+    // Fireplaces add extra leakage
+    ach += (envelope.fireplaces * 0.1)
 
     // Convert humidity to grains of moisture difference
     // Simple estimation: 1 grain = ~0.00014 lbs water. 1 BTU evaporates ~0.001 lbs water.
@@ -283,11 +542,20 @@ export default function App() {
 
     // Heating (BTU/h)
     const heatWall = netWallArea * wallU * dtHeating
-    const heatRoof = roofArea * roofU * dtHeating
+    const heatRoof = netRoofArea * roofU * dtHeating
+
+    const heatFoundation = foundation.type === 'Slab'
+        ? geom.perimeter * foundationU * (dtHeating * 0.5)
+        : geom.area * foundationU * (dtHeating * 0.5)
 
     const heatWindow = windows.reduce((sum, w) => {
       const area = w.width * w.height
       return sum + (area * w.uValue * dtHeating)
+    }, 0)
+
+    const heatSkylight = skylights.reduce((sum, s) => {
+        const area = s.width * s.height
+        return sum + (area * s.uValue * dtHeating)
     }, 0)
 
     const heatDoor = doors.reduce((sum, d) => {
@@ -295,14 +563,43 @@ export default function App() {
       return sum + (area * d.uValue * dtHeating)
     }, 0)
 
-    const totalHeating = heatWall + heatRoof + heatWindow + heatDoor
+    // Infiltration Heating Load (Sensible)
+    // 1.08 * CFM * DT
+    const heatInfiltration = 1.08 * cfm * dtHeating
+
+    let totalHeating = heatWall + heatRoof + heatFoundation + heatWindow + heatSkylight + heatDoor + heatInfiltration
+
+    // Apply Duct Loss / Gain Multipliers
+    let ductMultiplier = 1.0
+    // If ducts are in unconditioned space, they lose/gain heat
+    if (ductSystem.location === 'Attic' || ductSystem.location === 'Crawlspace') {
+        // Base penalty for being in unconditioned space
+        ductMultiplier += 0.10
+
+        if (ductSystem.leakage === 'Average (10%)') ductMultiplier += 0.05
+        else if (ductSystem.leakage === 'Leaky (15%)') ductMultiplier += 0.10
+        // Tight is 0% added penalty
+
+        // Insulation reduction (very rough approx: R8 drops penalty by 4%)
+        if (ductSystem.insulationRValue > 0) {
+            ductMultiplier -= (ductSystem.insulationRValue * 0.005)
+        }
+    }
+
+    // Ensure multiplier doesn't go below 1.0 (can't have negative loss)
+    ductMultiplier = Math.max(1.0, ductMultiplier)
+
+    const finalCooling = totalCooling * ductMultiplier
+    const finalCoolingSensible = totalSensibleCooling * ductMultiplier
+    const finalCoolingLatent = totalLatentCooling * ductMultiplier
+    const finalHeating = totalHeating * ductMultiplier
 
     return {
-      cooling: Math.round(totalCooling),
-      coolingSensible: Math.round(totalSensibleCooling),
-      coolingLatent: Math.round(totalLatentCooling),
-      heating: Math.round(totalHeating),
-      tons: (totalCooling / 12000).toFixed(1)
+      cooling: Math.round(finalCooling),
+      coolingSensible: Math.round(finalCoolingSensible),
+      coolingLatent: Math.round(finalCoolingLatent),
+      heating: Math.round(finalHeating),
+      tons: (finalCooling / 12000).toFixed(1)
     }
   }
 
@@ -320,6 +617,11 @@ export default function App() {
         residents,
         windows,
         doors,
+        skylights,
+        ductSystem,
+        foundation,
+        attic,
+        envelope,
         rValues,
         indoorSummerTemp,
         indoorWinterTemp,
@@ -353,8 +655,13 @@ export default function App() {
           setPolygon(imported.state.polygon)
           setHouseHeight(imported.state.houseHeight)
           setSecondStory(imported.state.secondStory)
-          setWindows(imported.state.windows)
-          setDoors(imported.state.doors)
+          setWindows(imported.state.windows || [])
+          setDoors(imported.state.doors || [])
+          setSkylights(imported.state.skylights || [])
+          if (imported.state.ductSystem) setDuctSystem(imported.state.ductSystem)
+          if (imported.state.foundation) setFoundation(imported.state.foundation)
+          if (imported.state.attic) setAttic(imported.state.attic)
+          if (imported.state.envelope) setEnvelope(imported.state.envelope)
           setRValues(imported.state.rValues)
           setIndoorSummerTemp(imported.state.indoorSummerTemp)
           setIndoorWinterTemp(imported.state.indoorWinterTemp)
@@ -407,31 +714,65 @@ export default function App() {
 
             {/* Left Column: Image Map Editor */}
             <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 flex flex-col">
-              <div className="flex justify-between items-center mb-2">
+              <div className="flex justify-between items-center mb-2 flex-wrap gap-2">
                 <h2 className="text-lg font-semibold">Refine Footprint</h2>
-                <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200">
-                  <input
-                    type="checkbox"
-                    id="showSatellite"
-                    checked={showSatellite}
-                    onChange={e => setShowSatellite(e.target.checked)}
-                    className="w-4 h-4 cursor-pointer"
-                  />
-                  <label htmlFor="showSatellite" className="text-sm font-semibold cursor-pointer text-gray-700 select-none">
-                    Show Satellite View
-                  </label>
+                <div className="flex items-center gap-3 flex-wrap">
+                  {/* Premium Zoom Control Bar */}
+                  <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200">
+                    <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider select-none mr-1">Zoom</span>
+                    <button
+                      onClick={() => setZoomScale(z => Math.max(0.25, z - 0.25))}
+                      className="w-7 h-7 flex items-center justify-center border rounded bg-white hover:bg-gray-50 text-gray-600 font-bold select-none text-sm shadow-sm transition-colors"
+                      title="Zoom Out"
+                    >
+                      -
+                    </button>
+                    <span className="text-xs font-semibold text-gray-700 w-12 text-center select-none font-mono">
+                      {Math.round(zoomScale * 100)}%
+                    </span>
+                    <button
+                      onClick={() => setZoomScale(z => Math.min(3.0, z + 0.25))}
+                      className="w-7 h-7 flex items-center justify-center border rounded bg-white hover:bg-gray-50 text-gray-600 font-bold select-none text-sm shadow-sm transition-colors"
+                      title="Zoom In"
+                    >
+                      +
+                    </button>
+                    <button
+                      onClick={() => setZoomScale(1.0)}
+                      className="text-xs px-2 py-1 border rounded bg-white hover:bg-gray-50 text-gray-500 font-medium select-none shadow-sm ml-1 transition-colors"
+                      title="Reset Zoom"
+                    >
+                      Reset
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-lg border border-gray-200">
+                    <input
+                      type="checkbox"
+                      id="showSatellite"
+                      checked={showSatellite}
+                      onChange={e => setShowSatellite(e.target.checked)}
+                      className="w-4 h-4 cursor-pointer"
+                    />
+                    <label htmlFor="showSatellite" className="text-sm font-semibold cursor-pointer text-gray-700 select-none">
+                      Show Satellite View
+                    </label>
+                  </div>
                 </div>
               </div>
-              <p className="text-sm text-gray-500 mb-4">Drag the points to align perfectly with the building outline. Click on the map to add new points, or right-click a point to delete it.</p>
+              <p className="text-sm text-gray-500 mb-4">
+                Drag points to align. Click on the map to add a point. Click a point to highlight it, then press <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">D</strong> / <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">Delete</strong> to delete it, or <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">A</strong> / <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">N</strong> to insert a new vertex next to it.
+              </p>
 
               <div ref={containerRef} className="border rounded-lg overflow-auto select-none bg-gray-100" style={{height: "600px"}}>
-                <div className="relative w-[3000px] h-[2000px]">
-                  <img
-                    src={`http://localhost:8000${showSatellite && data.sat_image_url ? data.sat_image_url : data.image_url}`}
-                    alt="Map Capture"
-                    className="absolute inset-0 w-full h-full object-cover"
-                    draggable={false}
-                  />
+                <div style={{ width: `${3000 * zoomScale}px`, height: `${2000 * zoomScale}px`, overflow: 'hidden' }}>
+                  <div className="relative w-[3000px] h-[2000px]" style={{ transform: `scale(${zoomScale})`, transformOrigin: 'top left' }}>
+                    <img
+                      src={showSatellite && data.sat_image_url ? data.sat_image_url : data.image_url}
+                      alt="Map Capture"
+                      className="absolute inset-0 w-full h-full object-cover"
+                      draggable={false}
+                    />
                   {/* SVG Overlay for editing the polygon */}
                   <svg
                     ref={svgRef}
@@ -455,15 +796,20 @@ export default function App() {
                       key={i}
                       cx={pt.x}
                       cy={pt.y}
-                      r="6"
-                      fill="white"
-                      stroke="#2563eb"
-                      strokeWidth="2"
+                      r={selectedNode === i ? "9" : "6"}
+                      fill={selectedNode === i ? "#ea4335" : "white"}
+                      stroke={selectedNode === i ? "white" : "#2563eb"}
+                      strokeWidth={selectedNode === i ? "3" : "2"}
                       className="cursor-move"
                       onPointerDown={(e) => handlePointerDown(e, i)}
+                      style={{
+                        transition: "r 0.15s ease, fill 0.15s ease",
+                        filter: selectedNode === i ? "drop-shadow(0 0 4px rgba(234, 67, 53, 0.6))" : "none"
+                      }}
                     />
                   ))}
                 </svg>
+                </div>
                 </div>
               </div>
 
@@ -504,11 +850,98 @@ export default function App() {
                   <WindowsDoors
                     windows={windows} setWindows={setWindows}
                     doors={doors} setDoors={setDoors}
+                    skylights={skylights} setSkylights={setSkylights}
                   />
                 </div>
 
                 <div className="mt-6 border-t pt-4">
-                  <h3 className="text-sm font-semibold mb-3 border-b pb-2">Climate & Envelope Defaults</h3>
+                  <h3 className="text-sm font-semibold mb-3 border-b pb-2">Envelope Defaults</h3>
+
+                  <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                    <div>
+                      <label className="block text-gray-500 mb-1">Wall R-Value</label>
+                      <input type="number" className="w-full p-1 border rounded" value={rValues.wall} onChange={e => setRValues({...rValues, wall: Number(e.target.value)})} />
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 mb-1">Old Roof R-Value (Legacy)</label>
+                      <input type="number" className="w-full p-1 border rounded" value={rValues.roof} onChange={e => setRValues({...rValues, roof: Number(e.target.value)})} />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                    <div>
+                      <label className="block text-gray-500 mb-1">Attic Type</label>
+                      <select className="w-full p-1 border rounded" value={attic.type} onChange={e => setAttic({...attic, type: e.target.value as any})}>
+                        <option value="Vented">Vented</option>
+                        <option value="Unvented">Unvented</option>
+                        <option value="No Attic">No Attic</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 mb-1">Attic R-Value</label>
+                      <input type="number" className="w-full p-1 border rounded" value={attic.rValue} onChange={e => setAttic({...attic, rValue: Number(e.target.value)})} />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                    <div>
+                      <label className="block text-gray-500 mb-1">Foundation Type</label>
+                      <select className="w-full p-1 border rounded" value={foundation.type} onChange={e => setFoundation({...foundation, type: e.target.value as any})}>
+                        <option value="Slab">Slab</option>
+                        <option value="Crawlspace">Crawlspace</option>
+                        <option value="Basement">Basement</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 mb-1">Foundation R-Value</label>
+                      <input type="number" className="w-full p-1 border rounded" value={foundation.rValue} onChange={e => setFoundation({...foundation, rValue: Number(e.target.value)})} />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                    <div>
+                      <label className="block text-gray-500 mb-1">Envelope Tightness</label>
+                      <select className="w-full p-1 border rounded" value={envelope.tightness} onChange={e => setEnvelope({...envelope, tightness: e.target.value as any})}>
+                        <option value="Tight">Tight</option>
+                        <option value="Average">Average</option>
+                        <option value="Loose">Loose</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 mb-1">Fireplaces</label>
+                      <input type="number" className="w-full p-1 border rounded" value={envelope.fireplaces} onChange={e => setEnvelope({...envelope, fireplaces: Number(e.target.value)})} />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-6 border-t pt-4">
+                  <h3 className="text-sm font-semibold mb-3 border-b pb-2">Duct System</h3>
+                  <div className="grid grid-cols-3 gap-4 text-sm mb-4">
+                    <div>
+                      <label className="block text-gray-500 mb-1">Location</label>
+                      <select className="w-full p-1 border rounded" value={ductSystem.location} onChange={e => setDuctSystem({...ductSystem, location: e.target.value as any})}>
+                        <option value="Attic">Attic</option>
+                        <option value="Crawlspace">Crawlspace</option>
+                        <option value="Conditioned Space">Conditioned Space</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 mb-1">Leakage</label>
+                      <select className="w-full p-1 border rounded" value={ductSystem.leakage} onChange={e => setDuctSystem({...ductSystem, leakage: e.target.value as any})}>
+                        <option value="Tight (5%)">Tight (5%)</option>
+                        <option value="Average (10%)">Average (10%)</option>
+                        <option value="Leaky (15%)">Leaky (15%)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 mb-1">Insulation R-Value</label>
+                      <input type="number" className="w-full p-1 border rounded" value={ductSystem.insulationRValue} onChange={e => setDuctSystem({...ductSystem, insulationRValue: Number(e.target.value)})} />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-6 border-t pt-4">
+                  <h3 className="text-sm font-semibold mb-3 border-b pb-2">Climate Defaults</h3>
 
                   <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 text-sm mb-4">
                     <div>
@@ -540,16 +973,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <label className="block text-gray-500 mb-1">Wall R-Value</label>
-                      <input type="number" className="w-full p-1 border rounded" value={rValues.wall} onChange={e => setRValues({...rValues, wall: Number(e.target.value)})} />
-                    </div>
-                    <div>
-                      <label className="block text-gray-500 mb-1">Roof R-Value</label>
-                      <input type="number" className="w-full p-1 border rounded" value={rValues.roof} onChange={e => setRValues({...rValues, roof: Number(e.target.value)})} />
-                    </div>
-                  </div>
                 </div>
               </div>
 
