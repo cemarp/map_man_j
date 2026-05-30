@@ -1,32 +1,6 @@
-INFO:     Will watch for changes in these directories: ['/app/backend']
+INFO:     Started server process [853111]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [727240] using StatReload
-INFO:     Started server process [727299]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     127.0.0.1:56268 - "OPTIONS /extract HTTP/1.1" 200 OK
-Original URL: https://www.google.com/maps/place/1950+Ellen+Ave,+San+Jose,+CA+95125/@37.2970351,-121.8873522,19z
-Satellite URL: https://www.google.com/maps/place/1950+Ellen+Ave,+San+Jose,+CA+95125/@37.2970351,-121.8873522,19z/data=!3m1!1e3
-Waiting for maps to load for images/55b89dec-be0e-45d1-91ac-f6b81e267084_sat.png...
-Waiting for maps to load for images/55b89dec-be0e-45d1-91ac-f6b81e267084.png...
-Taking screenshot to images/55b89dec-be0e-45d1-91ac-f6b81e267084_sat.png...
-Taking screenshot to images/55b89dec-be0e-45d1-91ac-f6b81e267084.png...
-INFO:     127.0.0.1:56276 - "POST /extract HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52962 - "GET /images/55b89dec-be0e-45d1-91ac-f6b81e267084.png HTTP/1.1" 200 OK
-INFO:     127.0.0.1:52962 - "GET /images/55b89dec-be0e-45d1-91ac-f6b81e267084_sat.png HTTP/1.1" 200 OK
-WARNING:  StatReload detected changes in 'capture.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [727299]
-INFO:     Started server process [741935]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-WARNING:  StatReload detected changes in 'main.py'. Reloading...
-INFO:     Shutting down
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.
-INFO:     Finished server process [741935]
-INFO:     Started server process [744794]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
+INFO:     127.0.0.1:40988 - "GET /metadata?lat=37.7749&lng=-122.4194&zoom=20 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53420 - "GET /metadata?lat=37.7749&lng=-122.4194&zoom=20 HTTP/1.1" 200 OK

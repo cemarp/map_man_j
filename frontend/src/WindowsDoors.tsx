@@ -8,6 +8,7 @@ interface WindowsDoorsProps {
   setDoors: React.Dispatch<React.SetStateAction<DoorEntry[]>>
   skylights: SkylightEntry[]
   setSkylights: React.Dispatch<React.SetStateAction<SkylightEntry[]>>
+  onRescanSkylights: () => void
 }
 
 const orientations: Orientation[] = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
@@ -26,7 +27,7 @@ const doorPresets = [
   { label: 'Glass Sliding', uValue: 0.65 },
 ]
 
-export default function WindowsDoors({ windows, setWindows, doors, setDoors, skylights, setSkylights }: WindowsDoorsProps) {
+export default function WindowsDoors({ windows, setWindows, doors, setDoors, skylights, setSkylights, onRescanSkylights }: WindowsDoorsProps) {
   const addWindow = () => {
     setWindows([...windows, {
       id: Math.random().toString(36).substring(7),
@@ -198,6 +199,10 @@ export default function WindowsDoors({ windows, setWindows, doors, setDoors, sky
       <div>
         <div className="flex justify-between items-center mb-3">
           <h3 className="text-sm font-semibold border-b pb-2 flex-1">Skylights</h3>
+          <button onClick={onRescanSkylights} className="ml-2 bg-emerald-100 text-emerald-700 px-2 py-1 rounded text-xs font-medium hover:bg-emerald-200 flex items-center gap-1">
+             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
+             Auto-Scan Roof
+          </button>
           <button onClick={addSkylight} className="ml-2 bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs font-medium hover:bg-blue-200">+ Add Skylight</button>
         </div>
         <div className="overflow-x-auto">

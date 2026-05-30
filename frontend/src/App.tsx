@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import WindowsDoors from './WindowsDoors'
 import type { WindowEntry, DoorEntry, SkylightEntry, DuctSystem, Foundation, Attic, Envelope } from './types'
 import { captureMapCanvas } from './MapCapture'
-import { extractBuildingOutline, getScaleFromLatZoom } from './cvEngine'
+import { extractBuildingOutline, getScaleFromLatZoom, cvAutoDetectSkylights, cvDetectSkylightAtPoint } from './cvEngine'
 
 type Point = { x: number, y: number }
 
@@ -85,6 +85,7 @@ export default function App() {
 
   const [selectedNode, setSelectedNode] = useState<number | null>(null)
   const [zoomScale, setZoomScale] = useState(1.0)
+  const [interactionMode, setInteractionMode] = useState<'editFootprint' | 'detectSkylight'>('editFootprint')
 
   // Dynamically load OpenCV.js inside the browser (Strict Mode safe)
   useEffect(() => {
@@ -405,7 +406,7 @@ export default function App() {
     e.currentTarget.releasePointerCapture(e.pointerId)
   }
 
-  const handleSvgClick = (e: React.MouseEvent) => {
+  const handleSvgClick = async (e: React.MouseEvent) => {
     if (!svgRef.current) return
     // Only handle direct clicks on the SVG (or polygon), not on circles
     if ((e.target as any).tagName === 'circle') return
@@ -418,12 +419,65 @@ export default function App() {
     const svgP = pt.matrixTransform(svg.getScreenCTM()?.inverse())
     const newPt = { x: Math.round(svgP.x), y: Math.round(svgP.y) }
 
+    if (interactionMode === 'detectSkylight') {
+        if (!data?.sat_image_url) return;
+        // Load the satellite image to a canvas
+        const img = new Image();
+        img.crossOrigin = "Anonymous";
+        img.src = data.sat_image_url;
+        await new Promise(r => img.onload = r);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+            ctx.drawImage(img, 0, 0);
+            const skylight = cvDetectSkylightAtPoint(canvas, newPt, data.scale);
+            if (skylight) {
+                setSkylights(prev => [...prev, skylight]);
+            } else {
+                alert("No valid skylight detected near that click point.");
+            }
+        }
+        return;
+    }
+
+    // Default Edit Footprint Mode
     // Add point to the end and select it
     setPolygon(prev => {
       const next = [...prev, newPt]
       setSelectedNode(next.length - 1)
       return next
     })
+  }
+
+  const handleRescanSkylights = async () => {
+      if (!data?.sat_image_url) return;
+      setLoading(true);
+      try {
+          const img = new Image();
+          img.crossOrigin = "Anonymous";
+          img.src = data.sat_image_url;
+          await new Promise(r => img.onload = r);
+
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+              ctx.drawImage(img, 0, 0);
+              const detected = cvAutoDetectSkylights(canvas, polygon, data.scale);
+              if (detected.length > 0) {
+                  setSkylights(prev => [...prev, ...detected]);
+                  alert(`Successfully detected ${detected.length} skylights! Review the list and remove any false positives.`);
+              } else {
+                  alert("No distinct skylights were automatically detected inside the footprint.");
+              }
+          }
+      } finally {
+          setLoading(false);
+      }
   }
 
   const polyStr = polygon.map(p => `${p.x},${p.y}`).join(" ")
@@ -760,11 +814,28 @@ export default function App() {
                   </div>
                 </div>
               </div>
-              <p className="text-sm text-gray-500 mb-4">
-                Drag points to align. Click on the map to add a point. Click a point to highlight it, then press <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">D</strong> / <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">Delete</strong> to delete it, or <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">A</strong> / <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">N</strong> to insert a new vertex next to it.
-              </p>
+              <div className="flex justify-between items-start mb-4">
+                  <p className="text-sm text-gray-500 flex-1">
+                    Drag points to align. Click on the map to add a point. Click a point to highlight it, then press <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">D</strong> / <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">Delete</strong> to delete it, or <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">A</strong> / <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">N</strong> to insert a new vertex next to it.
+                  </p>
+                  <div className="flex bg-gray-100 p-1 rounded-lg shadow-sm border border-gray-200 ml-4">
+                      <button
+                        onClick={() => setInteractionMode('editFootprint')}
+                        className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${interactionMode === 'editFootprint' ? 'bg-white text-blue-700 shadow border border-gray-200' : 'text-gray-500 hover:text-gray-700'}`}
+                      >
+                        Edit Footprint
+                      </button>
+                      <button
+                        onClick={() => { setInteractionMode('detectSkylight'); setShowSatellite(true); }}
+                        className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${interactionMode === 'detectSkylight' ? 'bg-white text-blue-700 shadow border border-gray-200' : 'text-gray-500 hover:text-gray-700'}`}
+                        title="Click on the map to auto-detect a skylight at that location"
+                      >
+                        Detect Skylight
+                      </button>
+                  </div>
+              </div>
 
-              <div ref={containerRef} className="border rounded-lg overflow-auto select-none bg-gray-100" style={{height: "600px"}}>
+              <div ref={containerRef} className={`border rounded-lg overflow-auto select-none bg-gray-100 ${interactionMode === 'detectSkylight' ? 'cursor-crosshair' : ''}`} style={{height: "600px"}}>
                 <div style={{ width: `${3000 * zoomScale}px`, height: `${2000 * zoomScale}px`, overflow: 'hidden' }}>
                   <div className="relative w-[3000px] h-[2000px]" style={{ transform: `scale(${zoomScale})`, transformOrigin: 'top left' }}>
                     <img
@@ -790,6 +861,7 @@ export default function App() {
                     fill="rgba(59, 130, 246, 0.3)"
                     stroke="#3b82f6"
                     strokeWidth="3"
+                    style={{ pointerEvents: interactionMode === 'detectSkylight' ? 'none' : 'auto' }}
                   />
                   {polygon.map((pt, i) => (
                     <circle
@@ -800,11 +872,14 @@ export default function App() {
                       fill={selectedNode === i ? "#ea4335" : "white"}
                       stroke={selectedNode === i ? "white" : "#2563eb"}
                       strokeWidth={selectedNode === i ? "3" : "2"}
-                      className="cursor-move"
-                      onPointerDown={(e) => handlePointerDown(e, i)}
+                      className={interactionMode === 'editFootprint' ? "cursor-move" : ""}
+                      onPointerDown={(e) => {
+                          if (interactionMode === 'editFootprint') handlePointerDown(e, i);
+                      }}
                       style={{
                         transition: "r 0.15s ease, fill 0.15s ease",
-                        filter: selectedNode === i ? "drop-shadow(0 0 4px rgba(234, 67, 53, 0.6))" : "none"
+                        filter: selectedNode === i ? "drop-shadow(0 0 4px rgba(234, 67, 53, 0.6))" : "none",
+                        pointerEvents: interactionMode === 'detectSkylight' ? 'none' : 'auto'
                       }}
                     />
                   ))}
@@ -851,6 +926,7 @@ export default function App() {
                     windows={windows} setWindows={setWindows}
                     doors={doors} setDoors={setDoors}
                     skylights={skylights} setSkylights={setSkylights}
+                    onRescanSkylights={handleRescanSkylights}
                   />
                 </div>
 
