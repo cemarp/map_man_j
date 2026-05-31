@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies for Playwright and OpenCV in a single cached layer
+# Install system dependencies for Playwright and OpenCV
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -11,10 +11,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install requirements and playwright Chromium dependencies in a single consolidated layer
-RUN pip install --no-cache-dir -r requirements.txt \
-    && playwright install --with-deps chromium
+# Install Playwright dependencies
+RUN pip install playwright
+RUN playwright install --with-deps chromium
 
 COPY . .
 

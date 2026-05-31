@@ -36,10 +36,10 @@ export default function App() {
   const [showSatellite, setShowSatellite] = useState(false)
 
   // User adjustable values
-  const [polygon, setPolygon] = useState<Point[]>([])
+  const [polygons, setPolygons] = useState<Point[][]>([])
+  const [activeFloorIndex, setActiveFloorIndex] = useState(0)
   const [activeNode, setActiveNode] = useState<number | null>(null)
   const [houseHeight, setHouseHeight] = useState(10)
-  const [secondStory, setSecondStory] = useState(false)
   const [residents, setResidents] = useState(2)
 
   const [windows, setWindows] = useState<WindowEntry[]>(Array(6).fill(null).map((_, i) => ({
@@ -159,35 +159,41 @@ export default function App() {
       // D, Delete, or Backspace to delete the highlighted vertex
       if (e.key === 'Delete' || e.key === 'Backspace' || e.key.toLowerCase() === 'd') {
         e.preventDefault()
-        if (polygon.length > 3) {
-          setPolygon(prev => {
-            const next = prev.filter((_, i) => i !== selectedNode)
-            const nextSelected = selectedNode >= next.length ? next.length - 1 : selectedNode
-            setSelectedNode(nextSelected)
-            return next
-          })
-          console.log(`Deleted vertex at index ${selectedNode}`)
-        }
+        setPolygons(prev => {
+          const currentFloorPolygon = prev[activeFloorIndex] || [];
+          if (currentFloorPolygon.length <= 3) return prev; // Don't allow deleting below 3 points (triangle)
+          const newFloorPolygon = currentFloorPolygon.filter((_, i) => i !== selectedNode);
+          const nextSelected = selectedNode >= newFloorPolygon.length ? newFloorPolygon.length - 1 : selectedNode;
+          setSelectedNode(nextSelected);
+
+          const newPolygons = [...prev];
+          newPolygons[activeFloorIndex] = newFloorPolygon;
+          return newPolygons;
+        })
       }
 
       // A, Insert, or N to insert a new vertex next to (after) the selected one
       if (e.key.toLowerCase() === 'a' || e.key === 'Insert' || e.key.toLowerCase() === 'n') {
         e.preventDefault()
-        setPolygon(prev => {
-          if (selectedNode >= prev.length) return prev
-          const currPt = prev[selectedNode]
-          const nextIdx = (selectedNode + 1) % prev.length
-          const nextPt = prev[nextIdx]
+        setPolygons(prev => {
+          const currentFloorPolygon = prev[activeFloorIndex] || [];
+          if (currentFloorPolygon.length === 0 || selectedNode >= currentFloorPolygon.length) return prev;
+
+          const nextPolygon = [...currentFloorPolygon];
+          const currPt = nextPolygon[selectedNode];
+          const nextIdx = (selectedNode + 1) % nextPolygon.length;
+          const nextPt = nextPolygon[nextIdx];
           const midpoint = {
             x: Math.round((currPt.x + nextPt.x) / 2),
             y: Math.round((currPt.y + nextPt.y) / 2)
           }
-          const next = [...prev]
-          next.splice(selectedNode + 1, 0, midpoint)
-          setSelectedNode(selectedNode + 1)
-          return next
+          nextPolygon.splice(selectedNode + 1, 0, midpoint);
+          setSelectedNode(selectedNode + 1);
+
+          const newPolygons = [...prev];
+          newPolygons[activeFloorIndex] = nextPolygon;
+          return newPolygons;
         })
-        console.log(`Inserted new vertex after index ${selectedNode}`)
       }
     }
 
@@ -195,7 +201,7 @@ export default function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [selectedNode, polygon.length, data])
+  }, [selectedNode, polygons, activeFloorIndex, data])
 
   // Auto-center viewport on the extracted polygon
   useEffect(() => {
@@ -203,9 +209,11 @@ export default function App() {
       let targetX = 1500
       let targetY = 1000
 
-      if (data.polygon && data.polygon.length > 0) {
-        const xs = data.polygon.map(p => p.x)
-        const ys = data.polygon.map(p => p.y)
+      const primaryPolygon = polygons[0] || (data.polygon && data.polygon.length > 0 ? data.polygon : []);
+
+      if (primaryPolygon && primaryPolygon.length > 0) {
+        const xs = primaryPolygon.map(p => p.x)
+        const ys = primaryPolygon.map(p => p.y)
         const minX = Math.min(...xs)
         const maxX = Math.max(...xs)
         const minY = Math.min(...ys)
@@ -315,7 +323,8 @@ export default function App() {
       }
 
       setData(responseData)
-      setPolygon(extractedPolygon)
+      setPolygons([extractedPolygon])
+      setActiveFloorIndex(0)
       setOutdoorSummerTemp(metadata.climate.summer_design_temp)
       setOutdoorWinterTemp(metadata.climate.winter_design_temp)
       setOutdoorHumidity(metadata.climate.outdoor_humidity)
@@ -365,12 +374,16 @@ export default function App() {
     if (e.button === 2) {
       // Right click to delete vertex
       e.preventDefault()
-      if (polygon.length > 3) {
-        setPolygon(prev => {
-          const next = prev.filter((_, i) => i !== index)
-          const nextSelected = index >= next.length ? next.length - 1 : index
-          setSelectedNode(nextSelected)
-          return next
+      const currentFloorPolygon = polygons[activeFloorIndex] || [];
+      if (currentFloorPolygon.length > 3) {
+        setPolygons(prev => {
+          const newFloorPolygon = currentFloorPolygon.filter((_, i) => i !== index);
+          const nextSelected = index >= newFloorPolygon.length ? newFloorPolygon.length - 1 : index;
+          setSelectedNode(nextSelected);
+
+          const newPolygons = [...prev];
+          newPolygons[activeFloorIndex] = newFloorPolygon;
+          return newPolygons;
         })
       }
       return
@@ -394,11 +407,14 @@ export default function App() {
     const boundedX = Math.max(0, Math.min(3000, svgP.x))
     const boundedY = Math.max(0, Math.min(2000, svgP.y))
 
-    setPolygon(prev => {
-      const next = [...prev]
-      next[activeNode] = { x: boundedX, y: boundedY }
-      return next
-    })
+    setPolygons(prev => {
+      const currentFloorPolygon = prev[activeFloorIndex] || [];
+      const nextPolygon = [...currentFloorPolygon];
+      nextPolygon[activeNode] = { x: Math.round(boundedX), y: Math.round(boundedY) };
+      const newPolygons = [...prev];
+      newPolygons[activeFloorIndex] = nextPolygon;
+      return newPolygons;
+    });
   }
 
   const handlePointerUp = (e: React.PointerEvent) => {
@@ -445,10 +461,30 @@ export default function App() {
 
     // Default Edit Footprint Mode
     // Add point to the end and select it
-    setPolygon(prev => {
-      const next = [...prev, newPt]
-      setSelectedNode(next.length - 1)
-      return next
+    setPolygons(prev => {
+      const currentFloorPolygon = prev[activeFloorIndex] || [];
+
+      // If it's a completely empty floorplan (e.g. CV failed, or drawing a new floor from scratch)
+      // just drop a default square to start.
+      if (currentFloorPolygon.length === 0) {
+         const s = 30;
+         const defaultSquare = [
+            { x: newPt.x - s, y: newPt.y - s },
+            { x: newPt.x + s, y: newPt.y - s },
+            { x: newPt.x + s, y: newPt.y + s },
+            { x: newPt.x - s, y: newPt.y + s }
+         ];
+         const newPolygons = [...prev];
+         newPolygons[activeFloorIndex] = defaultSquare;
+         setSelectedNode(0);
+         return newPolygons;
+      }
+
+      const nextPolygon = [...currentFloorPolygon, newPt]
+      const newPolygons = [...prev]
+      newPolygons[activeFloorIndex] = nextPolygon
+      setSelectedNode(nextPolygon.length - 1)
+      return newPolygons
     })
   }
 
@@ -467,7 +503,9 @@ export default function App() {
           const ctx = canvas.getContext('2d');
           if (ctx) {
               ctx.drawImage(img, 0, 0);
-              const detected = cvAutoDetectSkylights(canvas, polygon, data.scale);
+              // Auto-detect uses the highest floor/roof defined
+              const roofPolygon = polygons[polygons.length - 1] || [];
+              const detected = cvAutoDetectSkylights(canvas, roofPolygon, data.scale);
               if (detected.length > 0) {
                   setSkylights(prev => [...prev, ...detected]);
                   alert(`Successfully detected ${detected.length} skylights! Review the list and remove any false positives.`);
@@ -480,8 +518,15 @@ export default function App() {
       }
   }
 
-  const polyStr = polygon.map(p => `${p.x},${p.y}`).join(" ")
-  const geom = data ? calculateGeometries(polygon, data.scale) : { area: 0, perimeter: 0 }
+  const activePolyStr = (polygons[activeFloorIndex] || []).map(p => `${p.x},${p.y}`).join(" ")
+  const geom = data ? calculateGeometries(polygons[0] || [], data.scale) : { area: 0, perimeter: 0 } // Ground floor geometry
+
+  // Floor Colors: Ground (Blue), 2nd (Orange), 3rd (Purple)
+  const floorColors = [
+      { fill: "rgba(59, 130, 246, 0.3)", stroke: "#3b82f6" }, // Blue
+      { fill: "rgba(249, 115, 22, 0.3)", stroke: "#f97316" }, // Orange
+      { fill: "rgba(168, 85, 247, 0.3)", stroke: "#a855f7" }  // Purple
+  ];
 
   // Basic Manual J Estimation
   const calculateLoad = () => {
@@ -490,12 +535,34 @@ export default function App() {
     const dtCooling = outdoorSummerTemp - indoorSummerTemp
     const dtHeating = indoorWinterTemp - outdoorWinterTemp
 
+    // Find the active/highest floor defined for the roof area
+    // Iterate backwards to find the highest floor index that has a valid polygon
+    let highestFloorPoly = polygons[0] || [];
+    for (let i = polygons.length - 1; i >= 0; i--) {
+        if (polygons[i] && polygons[i].length >= 3) {
+            highestFloorPoly = polygons[i];
+            break;
+        }
+    }
+    const roofAreaGeom = calculateGeometries(highestFloorPoly, data.scale);
+
+    // Sum up the perimeter of all defined floors to get total wall area
+    // If multiple floors exist, each floor contributes to the total exposed wall area.
+    let totalWallPerimeter = 0;
+    polygons.forEach(pts => {
+        if (pts && pts.length >= 3) {
+            totalWallPerimeter += calculateGeometries(pts, data.scale).perimeter;
+        }
+    });
+    // If no polygons are drawn yet, fallback to 0
+    if (totalWallPerimeter === 0 && geom.perimeter > 0) totalWallPerimeter = geom.perimeter;
+
     // Area of elements
-    const wallArea = geom.perimeter * houseHeight * (secondStory ? 2 : 1)
+    const wallArea = totalWallPerimeter * houseHeight;
     const windowAreaTotal = windows.reduce((sum, w) => sum + (w.width * w.height), 0)
     const doorAreaTotal = doors.reduce((sum, d) => sum + (d.width * d.height), 0)
     const netWallArea = Math.max(0, wallArea - windowAreaTotal - doorAreaTotal)
-    const roofArea = geom.area
+    const roofArea = roofAreaGeom.area
 
     // Area of new elements
     const skylightAreaTotal = skylights.reduce((sum, s) => sum + (s.width * s.height), 0)
@@ -573,7 +640,17 @@ export default function App() {
     // People: ~200 BTU/h latent per person
     const latentInternalCool = residents * 200
     // Infiltration latent load: volume * air changes * moisture difference
-    const volume = geom.area * houseHeight * (secondStory ? 2 : 1)
+    // Calculate total volume by summing the footprint areas of all defined floors * houseHeight
+    let totalVolume = 0;
+    polygons.forEach(pts => {
+        if (pts && pts.length >= 3) {
+            totalVolume += calculateGeometries(pts, data.scale).area * houseHeight;
+        }
+    });
+    // Fallback if empty
+    if (totalVolume === 0) totalVolume = geom.area * houseHeight;
+
+    const volume = totalVolume;
 
     // Calculate ACH based on envelope tightness and fireplaces
     let ach = 0.5 // Average
@@ -665,9 +742,8 @@ export default function App() {
       sourceData: data,
       state: {
         url,
-        polygon,
+        polygons,
         houseHeight,
-        secondStory,
         residents,
         windows,
         doors,
@@ -706,9 +782,17 @@ export default function App() {
         if (imported.sourceData && imported.state) {
           setData(imported.sourceData)
           setUrl(imported.state.url)
-          setPolygon(imported.state.polygon)
+
+          // Backwards compatibility for old JSONs that had a single `polygon`
+          if (imported.state.polygons) {
+             setPolygons(imported.state.polygons)
+          } else if (imported.state.polygon) {
+             setPolygons([imported.state.polygon])
+          } else {
+             setPolygons([])
+          }
+
           setHouseHeight(imported.state.houseHeight)
-          setSecondStory(imported.state.secondStory)
           setWindows(imported.state.windows || [])
           setDoors(imported.state.doors || [])
           setSkylights(imported.state.skylights || [])
@@ -814,25 +898,52 @@ export default function App() {
                   </div>
                 </div>
               </div>
-              <div className="flex justify-between items-start mb-4">
+              <div className="flex flex-col gap-4 mb-4">
+                  <div className="flex justify-between items-center bg-gray-50 p-2 rounded border">
+                    <div className="flex items-center gap-3">
+                        <span className="text-sm font-semibold text-gray-700">Active Floor:</span>
+                        <select
+                            className="border p-1 rounded text-sm bg-white shadow-sm"
+                            value={activeFloorIndex}
+                            onChange={(e) => {
+                                const newIndex = Number(e.target.value);
+                                setActiveFloorIndex(newIndex);
+                                setSelectedNode(null);
+                                // If the newly selected floor doesn't exist, copy the ground floor
+                                setPolygons(prev => {
+                                    if (!prev[newIndex] || prev[newIndex].length === 0) {
+                                        const newPolygons = [...prev];
+                                        newPolygons[newIndex] = prev[0] ? [...prev[0]] : [];
+                                        return newPolygons;
+                                    }
+                                    return prev;
+                                });
+                            }}
+                        >
+                            <option value={0} className="text-blue-600 font-medium">Ground Floor</option>
+                            <option value={1} className="text-orange-600 font-medium">2nd Story</option>
+                            <option value={2} className="text-purple-600 font-medium">3rd Story</option>
+                        </select>
+                    </div>
+                    <div className="flex bg-gray-100 p-1 rounded-lg shadow-sm border border-gray-200 ml-4">
+                        <button
+                          onClick={() => setInteractionMode('editFootprint')}
+                          className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${interactionMode === 'editFootprint' ? 'bg-white text-blue-700 shadow border border-gray-200' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                          Edit Footprint
+                        </button>
+                        <button
+                          onClick={() => { setInteractionMode('detectSkylight'); setShowSatellite(true); }}
+                          className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${interactionMode === 'detectSkylight' ? 'bg-white text-blue-700 shadow border border-gray-200' : 'text-gray-500 hover:text-gray-700'}`}
+                          title="Click on the map to auto-detect a skylight at that location"
+                        >
+                          Detect Skylight
+                        </button>
+                    </div>
+                  </div>
                   <p className="text-sm text-gray-500 flex-1">
                     Drag points to align. Click on the map to add a point. Click a point to highlight it, then press <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">D</strong> / <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">Delete</strong> to delete it, or <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">A</strong> / <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">N</strong> to insert a new vertex next to it.
                   </p>
-                  <div className="flex bg-gray-100 p-1 rounded-lg shadow-sm border border-gray-200 ml-4">
-                      <button
-                        onClick={() => setInteractionMode('editFootprint')}
-                        className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${interactionMode === 'editFootprint' ? 'bg-white text-blue-700 shadow border border-gray-200' : 'text-gray-500 hover:text-gray-700'}`}
-                      >
-                        Edit Footprint
-                      </button>
-                      <button
-                        onClick={() => { setInteractionMode('detectSkylight'); setShowSatellite(true); }}
-                        className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${interactionMode === 'detectSkylight' ? 'bg-white text-blue-700 shadow border border-gray-200' : 'text-gray-500 hover:text-gray-700'}`}
-                        title="Click on the map to auto-detect a skylight at that location"
-                      >
-                        Detect Skylight
-                      </button>
-                  </div>
               </div>
 
               <div ref={containerRef} className={`border rounded-lg overflow-auto select-none bg-gray-100 ${interactionMode === 'detectSkylight' ? 'cursor-crosshair' : ''}`} style={{height: "600px"}}>
@@ -856,21 +967,40 @@ export default function App() {
                     viewBox="0 0 3000 2000"
                     preserveAspectRatio="xMidYMid meet"
                   >
+                  {/* Render inactive floors first so they are behind */}
+                  {polygons.map((pts, floorIndex) => {
+                      if (floorIndex === activeFloorIndex || !pts || pts.length === 0) return null;
+                      const fColor = floorColors[floorIndex] || floorColors[0];
+                      const ptsStr = pts.map(p => `${p.x},${p.y}`).join(" ");
+                      return (
+                          <polygon
+                              key={`floor-${floorIndex}`}
+                              points={ptsStr}
+                              fill={fColor.fill}
+                              stroke={fColor.stroke}
+                              strokeWidth="1.5"
+                              opacity={0.5}
+                              style={{ pointerEvents: 'none' }}
+                          />
+                      );
+                  })}
+
+                  {/* Render active floor */}
                   <polygon
-                    points={polyStr}
-                    fill="rgba(59, 130, 246, 0.3)"
-                    stroke="#3b82f6"
+                    points={activePolyStr}
+                    fill={(floorColors[activeFloorIndex] || floorColors[0]).fill}
+                    stroke={(floorColors[activeFloorIndex] || floorColors[0]).stroke}
                     strokeWidth="3"
                     style={{ pointerEvents: interactionMode === 'detectSkylight' ? 'none' : 'auto' }}
                   />
-                  {polygon.map((pt, i) => (
+                  {(polygons[activeFloorIndex] || []).map((pt, i) => (
                     <circle
                       key={i}
                       cx={pt.x}
                       cy={pt.y}
                       r={selectedNode === i ? "9" : "6"}
                       fill={selectedNode === i ? "#ea4335" : "white"}
-                      stroke={selectedNode === i ? "white" : "#2563eb"}
+                      stroke={selectedNode === i ? "white" : (floorColors[activeFloorIndex] || floorColors[0]).stroke}
                       strokeWidth={selectedNode === i ? "3" : "2"}
                       className={interactionMode === 'editFootprint' ? "cursor-move" : ""}
                       onPointerDown={(e) => {
@@ -914,10 +1044,6 @@ export default function App() {
                   <div>
                     <label className="block text-sm text-gray-600 mb-1">Number of Occupants</label>
                     <input type="number" className="w-full p-2 border rounded" value={residents} onChange={e => setResidents(Number(e.target.value))} />
-                  </div>
-                  <div className="col-span-2 flex items-center gap-2 mt-2">
-                    <input type="checkbox" id="secondStory" checked={secondStory} onChange={e => setSecondStory(e.target.checked)} className="w-4 h-4" />
-                    <label htmlFor="secondStory" className="text-sm">Has 2nd Story (doubles wall area)</label>
                   </div>
                 </div>
 
