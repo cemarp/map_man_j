@@ -37,6 +37,7 @@ export default function App() {
 
   // User adjustable values
   const [polygons, setPolygons] = useState<Point[][]>([])
+  const [enabledFloors, setEnabledFloors] = useState<boolean[]>([true, false, false])
   const [activeFloorIndex, setActiveFloorIndex] = useState(0)
   const [activeNode, setActiveNode] = useState<number | null>(null)
   const [houseHeight, setHouseHeight] = useState(10)
@@ -324,6 +325,7 @@ export default function App() {
 
       setData(responseData)
       setPolygons([extractedPolygon])
+      setEnabledFloors([true, false, false])
       setActiveFloorIndex(0)
       setOutdoorSummerTemp(metadata.climate.summer_design_temp)
       setOutdoorWinterTemp(metadata.climate.winter_design_temp)
@@ -488,6 +490,59 @@ export default function App() {
     })
   }
 
+  const handleToggleFloor = (floorIndex: number, enabled: boolean) => {
+    setEnabledFloors(prev => {
+        const next = [...prev];
+        next[floorIndex] = enabled;
+
+        // Cascading logic
+        if (enabled) {
+            // Selecting 3rd story (2) requires 2nd story (1) to be enabled
+            if (floorIndex === 2) next[1] = true;
+
+            // Auto-initialize polygon from the floor below if empty
+            setPolygons(currPolys => {
+                if (!currPolys[floorIndex] || currPolys[floorIndex].length === 0) {
+                    const newPolys = [...currPolys];
+                    // Find highest enabled floor below this one to copy from
+                    let copyFrom = 0;
+                    for (let i = floorIndex - 1; i >= 0; i--) {
+                        if (next[i] && currPolys[i] && currPolys[i].length > 0) {
+                            copyFrom = i;
+                            break;
+                        }
+                    }
+                    newPolys[floorIndex] = currPolys[copyFrom] ? [...currPolys[copyFrom]] : [];
+                    return newPolys;
+                }
+                return currPolys;
+            });
+
+            // Switch to editing this floor
+            setActiveFloorIndex(floorIndex);
+            setSelectedNode(null);
+        } else {
+            // Deselecting 2nd story (1) forces 3rd story (2) to be deselected
+            if (floorIndex === 1) next[2] = false;
+
+            // If we just disabled the floor we were editing, drop down
+            if (activeFloorIndex === floorIndex || (floorIndex === 1 && activeFloorIndex === 2)) {
+                let fallbackFloor = 0;
+                for (let i = floorIndex - 1; i >= 0; i--) {
+                    if (next[i]) {
+                        fallbackFloor = i;
+                        break;
+                    }
+                }
+                setActiveFloorIndex(fallbackFloor);
+                setSelectedNode(null);
+            }
+        }
+
+        return next;
+    });
+  }
+
   const handleRescanSkylights = async () => {
       if (!data?.sat_image_url) return;
       setLoading(true);
@@ -536,21 +591,21 @@ export default function App() {
     const dtHeating = indoorWinterTemp - outdoorWinterTemp
 
     // Find the active/highest floor defined for the roof area
-    // Iterate backwards to find the highest floor index that has a valid polygon
+    // Iterate backwards to find the highest enabled floor index that has a valid polygon
     let highestFloorPoly = polygons[0] || [];
     for (let i = polygons.length - 1; i >= 0; i--) {
-        if (polygons[i] && polygons[i].length >= 3) {
+        if (enabledFloors[i] && polygons[i] && polygons[i].length >= 3) {
             highestFloorPoly = polygons[i];
             break;
         }
     }
     const roofAreaGeom = calculateGeometries(highestFloorPoly, data.scale);
 
-    // Sum up the perimeter of all defined floors to get total wall area
-    // If multiple floors exist, each floor contributes to the total exposed wall area.
+    // Sum up the perimeter of all ENABLED floors to get total wall area
+    // If multiple floors exist, each enabled floor contributes to the total exposed wall area.
     let totalWallPerimeter = 0;
-    polygons.forEach(pts => {
-        if (pts && pts.length >= 3) {
+    polygons.forEach((pts, i) => {
+        if (enabledFloors[i] && pts && pts.length >= 3) {
             totalWallPerimeter += calculateGeometries(pts, data.scale).perimeter;
         }
     });
@@ -640,10 +695,10 @@ export default function App() {
     // People: ~200 BTU/h latent per person
     const latentInternalCool = residents * 200
     // Infiltration latent load: volume * air changes * moisture difference
-    // Calculate total volume by summing the footprint areas of all defined floors * houseHeight
+    // Calculate total volume by summing the footprint areas of all ENABLED floors * houseHeight
     let totalVolume = 0;
-    polygons.forEach(pts => {
-        if (pts && pts.length >= 3) {
+    polygons.forEach((pts, i) => {
+        if (enabledFloors[i] && pts && pts.length >= 3) {
             totalVolume += calculateGeometries(pts, data.scale).area * houseHeight;
         }
     });
@@ -743,6 +798,7 @@ export default function App() {
       state: {
         url,
         polygons,
+        enabledFloors,
         houseHeight,
         residents,
         windows,
@@ -790,6 +846,16 @@ export default function App() {
              setPolygons([imported.state.polygon])
           } else {
              setPolygons([])
+          }
+
+          if (imported.state.enabledFloors) {
+             setEnabledFloors(imported.state.enabledFloors)
+          } else {
+             // Fallback: estimate enabled floors based on length of imported polygons
+             const newEnabled = [true, false, false]
+             if (imported.state.polygons && imported.state.polygons.length > 1) newEnabled[1] = true
+             if (imported.state.polygons && imported.state.polygons.length > 2) newEnabled[2] = true
+             setEnabledFloors(newEnabled)
           }
 
           setHouseHeight(imported.state.houseHeight)
@@ -899,33 +965,35 @@ export default function App() {
                 </div>
               </div>
               <div className="flex flex-col gap-4 mb-4">
-                  <div className="flex justify-between items-center bg-gray-50 p-2 rounded border">
-                    <div className="flex items-center gap-3">
-                        <span className="text-sm font-semibold text-gray-700">Active Floor:</span>
-                        <select
-                            className="border p-1 rounded text-sm bg-white shadow-sm"
-                            value={activeFloorIndex}
-                            onChange={(e) => {
-                                const newIndex = Number(e.target.value);
-                                setActiveFloorIndex(newIndex);
-                                setSelectedNode(null);
-                                // If the newly selected floor doesn't exist, copy the ground floor
-                                setPolygons(prev => {
-                                    if (!prev[newIndex] || prev[newIndex].length === 0) {
-                                        const newPolygons = [...prev];
-                                        newPolygons[newIndex] = prev[0] ? [...prev[0]] : [];
-                                        return newPolygons;
-                                    }
-                                    return prev;
-                                });
-                            }}
-                        >
-                            <option value={0} className="text-blue-600 font-medium">Ground Floor</option>
-                            <option value={1} className="text-orange-600 font-medium">2nd Story</option>
-                            <option value={2} className="text-purple-600 font-medium">3rd Story</option>
-                        </select>
+                  <div className="flex flex-col md:flex-row md:justify-between md:items-center bg-gray-50 p-2 rounded border gap-4">
+                    <div className="flex items-center gap-4 flex-wrap">
+                        <span className="text-sm font-semibold text-gray-700">Floors:</span>
+                        {[
+                          { id: 0, label: "Ground", colorClass: "text-blue-600" },
+                          { id: 1, label: "2nd Story", colorClass: "text-orange-600" },
+                          { id: 2, label: "3rd Story", colorClass: "text-purple-600" }
+                        ].map(floor => (
+                           <div key={floor.id} className="flex items-center gap-1.5 bg-white px-2 py-1 rounded shadow-sm border text-sm">
+                             <input
+                               type="checkbox"
+                               checked={enabledFloors[floor.id]}
+                               onChange={(e) => handleToggleFloor(floor.id, e.target.checked)}
+                               disabled={floor.id === 0} // Ground floor always enabled
+                               className="w-3.5 h-3.5 cursor-pointer disabled:opacity-50"
+                             />
+                             <button
+                               onClick={() => {
+                                 if (!enabledFloors[floor.id]) handleToggleFloor(floor.id, true);
+                                 else { setActiveFloorIndex(floor.id); setSelectedNode(null); }
+                               }}
+                               className={`font-medium ${floor.colorClass} hover:underline ${activeFloorIndex === floor.id ? 'underline font-bold' : ''}`}
+                             >
+                               {floor.label}
+                             </button>
+                           </div>
+                        ))}
                     </div>
-                    <div className="flex bg-gray-100 p-1 rounded-lg shadow-sm border border-gray-200 ml-4">
+                    <div className="flex bg-gray-100 p-1 rounded-lg shadow-sm border border-gray-200">
                         <button
                           onClick={() => setInteractionMode('editFootprint')}
                           className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${interactionMode === 'editFootprint' ? 'bg-white text-blue-700 shadow border border-gray-200' : 'text-gray-500 hover:text-gray-700'}`}
@@ -969,7 +1037,7 @@ export default function App() {
                   >
                   {/* Render inactive floors first so they are behind */}
                   {polygons.map((pts, floorIndex) => {
-                      if (floorIndex === activeFloorIndex || !pts || pts.length === 0) return null;
+                      if (floorIndex === activeFloorIndex || !pts || pts.length === 0 || !enabledFloors[floorIndex]) return null;
                       const fColor = floorColors[floorIndex] || floorColors[0];
                       const ptsStr = pts.map(p => `${p.x},${p.y}`).join(" ");
                       return (
@@ -986,14 +1054,16 @@ export default function App() {
                   })}
 
                   {/* Render active floor */}
-                  <polygon
-                    points={activePolyStr}
-                    fill={(floorColors[activeFloorIndex] || floorColors[0]).fill}
-                    stroke={(floorColors[activeFloorIndex] || floorColors[0]).stroke}
-                    strokeWidth="3"
-                    style={{ pointerEvents: interactionMode === 'detectSkylight' ? 'none' : 'auto' }}
-                  />
-                  {(polygons[activeFloorIndex] || []).map((pt, i) => (
+                  {enabledFloors[activeFloorIndex] && (
+                    <polygon
+                      points={activePolyStr}
+                      fill={(floorColors[activeFloorIndex] || floorColors[0]).fill}
+                      stroke={(floorColors[activeFloorIndex] || floorColors[0]).stroke}
+                      strokeWidth="3"
+                      style={{ pointerEvents: interactionMode === 'detectSkylight' ? 'none' : 'auto' }}
+                    />
+                  )}
+                  {enabledFloors[activeFloorIndex] && (polygons[activeFloorIndex] || []).map((pt, i) => (
                     <circle
                       key={i}
                       cx={pt.x}

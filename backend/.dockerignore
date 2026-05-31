@@ -1,8 +1,0 @@
-__pycache__
-venv
-images
-*.log
-.git
-Dockerfile
-.dockerignore
-.env
