@@ -25,3 +25,11 @@ The task is to implement a dual-capture feature for an HVAC Manual J calculation
 
 ## Remaining Tasks / Blockers
 - None! All tasks are fully implemented, verified via visual E2E playwright testing, and completely resolved.
+
+## Playwright / E2E Testing Notes (Important)
+- The frontend `html2canvas` extraction process uses OpenCV.js (WASM) and DOM traversal, which blocks the main thread.
+- **Headless Chrome Timeout Issue:** In standard headless mode, Playwright often times out waiting for `html2canvas` to capture the Map and Satellite images because the Chromium rendering pipeline fails to produce a stable DOM paint state, causing a race condition or outright hang.
+- **The Fix:** If you write an End-to-End (E2E) Playwright script to verify the extraction logic, you **must**:
+  1. Add explicit waits before triggering the extraction:
+     `page.wait_for_load_state("networkidle")` and `page.wait_for_timeout(2000)`.
+  2. Run the script in headed mode using an X server. In headless CI or Sandbox environments, use `xvfb-run python3 your_script.py`. Setting `headless=False` ensures a real paint cycle occurs.
