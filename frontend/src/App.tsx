@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import WindowsDoors from './WindowsDoors'
-import type { WindowEntry, DoorEntry } from './types'
+import type { WindowEntry, DoorEntry, SkylightEntry, DuctSystem, Foundation, Attic, Envelope } from './types'
 import { captureMapCanvas } from './MapCapture'
-import { extractBuildingOutline, getScaleFromLatZoom } from './cvEngine'
+import { extractBuildingOutline, getScaleFromLatZoom, cvAutoDetectSkylights, cvDetectSkylightAtPoint } from './cvEngine'
 
 type Point = { x: number, y: number }
 
@@ -36,10 +36,11 @@ export default function App() {
   const [showSatellite, setShowSatellite] = useState(false)
 
   // User adjustable values
-  const [polygon, setPolygon] = useState<Point[]>([])
+  const [polygons, setPolygons] = useState<Point[][]>([])
+  const [enabledFloors, setEnabledFloors] = useState<boolean[]>([true, false, false])
+  const [activeFloorIndex, setActiveFloorIndex] = useState(0)
   const [activeNode, setActiveNode] = useState<number | null>(null)
   const [houseHeight, setHouseHeight] = useState(10)
-  const [secondStory, setSecondStory] = useState(false)
   const [residents, setResidents] = useState(2)
 
   const [windows, setWindows] = useState<WindowEntry[]>(Array(6).fill(null).map((_, i) => ({
@@ -70,14 +71,22 @@ export default function App() {
   const [outdoorWinterTemp, setOutdoorWinterTemp] = useState(30)
   const [outdoorHumidity, setOutdoorHumidity] = useState(50)
 
+  // New State variables for Manual J Enhancements
+  const [skylights, setSkylights] = useState<SkylightEntry[]>([])
+  const [ductSystem, setDuctSystem] = useState<DuctSystem>({ location: 'Conditioned Space', insulationRValue: 0, leakage: 'Tight (5%)' })
+  const [foundation, setFoundation] = useState<Foundation>({ type: 'Slab', rValue: 0 })
+  const [attic, setAttic] = useState<Attic>({ type: 'Vented', rValue: 30 })
+  const [envelope, setEnvelope] = useState<Envelope>({ tightness: 'Average', fireplaces: 0 })
+
   const svgRef = useRef<SVGSVGElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const [cvLoaded, setCvLoaded] = useState(false)
-  const [cvLoading, setCvLoading] = useState(false)
+
   const [selectedNode, setSelectedNode] = useState<number | null>(null)
   const [zoomScale, setZoomScale] = useState(1.0)
+  const [interactionMode, setInteractionMode] = useState<'editFootprint' | 'detectSkylight'>('editFootprint')
 
   // Dynamically load OpenCV.js inside the browser (Strict Mode safe)
   useEffect(() => {
@@ -151,35 +160,41 @@ export default function App() {
       // D, Delete, or Backspace to delete the highlighted vertex
       if (e.key === 'Delete' || e.key === 'Backspace' || e.key.toLowerCase() === 'd') {
         e.preventDefault()
-        if (polygon.length > 3) {
-          setPolygon(prev => {
-            const next = prev.filter((_, i) => i !== selectedNode)
-            const nextSelected = selectedNode >= next.length ? next.length - 1 : selectedNode
-            setSelectedNode(nextSelected)
-            return next
-          })
-          console.log(`Deleted vertex at index ${selectedNode}`)
-        }
+        setPolygons(prev => {
+          const currentFloorPolygon = prev[activeFloorIndex] || [];
+          if (currentFloorPolygon.length <= 3) return prev; // Don't allow deleting below 3 points (triangle)
+          const newFloorPolygon = currentFloorPolygon.filter((_, i) => i !== selectedNode);
+          const nextSelected = selectedNode >= newFloorPolygon.length ? newFloorPolygon.length - 1 : selectedNode;
+          setSelectedNode(nextSelected);
+
+          const newPolygons = [...prev];
+          newPolygons[activeFloorIndex] = newFloorPolygon;
+          return newPolygons;
+        })
       }
 
       // A, Insert, or N to insert a new vertex next to (after) the selected one
       if (e.key.toLowerCase() === 'a' || e.key === 'Insert' || e.key.toLowerCase() === 'n') {
         e.preventDefault()
-        setPolygon(prev => {
-          if (selectedNode >= prev.length) return prev
-          const currPt = prev[selectedNode]
-          const nextIdx = (selectedNode + 1) % prev.length
-          const nextPt = prev[nextIdx]
+        setPolygons(prev => {
+          const currentFloorPolygon = prev[activeFloorIndex] || [];
+          if (currentFloorPolygon.length === 0 || selectedNode >= currentFloorPolygon.length) return prev;
+
+          const nextPolygon = [...currentFloorPolygon];
+          const currPt = nextPolygon[selectedNode];
+          const nextIdx = (selectedNode + 1) % nextPolygon.length;
+          const nextPt = nextPolygon[nextIdx];
           const midpoint = {
             x: Math.round((currPt.x + nextPt.x) / 2),
             y: Math.round((currPt.y + nextPt.y) / 2)
           }
-          const next = [...prev]
-          next.splice(selectedNode + 1, 0, midpoint)
-          setSelectedNode(selectedNode + 1)
-          return next
+          nextPolygon.splice(selectedNode + 1, 0, midpoint);
+          setSelectedNode(selectedNode + 1);
+
+          const newPolygons = [...prev];
+          newPolygons[activeFloorIndex] = nextPolygon;
+          return newPolygons;
         })
-        console.log(`Inserted new vertex after index ${selectedNode}`)
       }
     }
 
@@ -187,7 +202,7 @@ export default function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [selectedNode, polygon.length, data])
+  }, [selectedNode, polygons, activeFloorIndex, data])
 
   // Auto-center viewport on the extracted polygon
   useEffect(() => {
@@ -195,9 +210,11 @@ export default function App() {
       let targetX = 1500
       let targetY = 1000
 
-      if (data.polygon && data.polygon.length > 0) {
-        const xs = data.polygon.map(p => p.x)
-        const ys = data.polygon.map(p => p.y)
+      const primaryPolygon = polygons[0] || (data.polygon && data.polygon.length > 0 ? data.polygon : []);
+
+      if (primaryPolygon && primaryPolygon.length > 0) {
+        const xs = primaryPolygon.map(p => p.x)
+        const ys = primaryPolygon.map(p => p.y)
         const minX = Math.min(...xs)
         const maxX = Math.max(...xs)
         const minY = Math.min(...ys)
@@ -307,7 +324,9 @@ export default function App() {
       }
 
       setData(responseData)
-      setPolygon(extractedPolygon)
+      setPolygons([extractedPolygon])
+      setEnabledFloors([true, false, false])
+      setActiveFloorIndex(0)
       setOutdoorSummerTemp(metadata.climate.summer_design_temp)
       setOutdoorWinterTemp(metadata.climate.winter_design_temp)
       setOutdoorHumidity(metadata.climate.outdoor_humidity)
@@ -357,12 +376,16 @@ export default function App() {
     if (e.button === 2) {
       // Right click to delete vertex
       e.preventDefault()
-      if (polygon.length > 3) {
-        setPolygon(prev => {
-          const next = prev.filter((_, i) => i !== index)
-          const nextSelected = index >= next.length ? next.length - 1 : index
-          setSelectedNode(nextSelected)
-          return next
+      const currentFloorPolygon = polygons[activeFloorIndex] || [];
+      if (currentFloorPolygon.length > 3) {
+        setPolygons(prev => {
+          const newFloorPolygon = currentFloorPolygon.filter((_, i) => i !== index);
+          const nextSelected = index >= newFloorPolygon.length ? newFloorPolygon.length - 1 : index;
+          setSelectedNode(nextSelected);
+
+          const newPolygons = [...prev];
+          newPolygons[activeFloorIndex] = newFloorPolygon;
+          return newPolygons;
         })
       }
       return
@@ -386,11 +409,14 @@ export default function App() {
     const boundedX = Math.max(0, Math.min(3000, svgP.x))
     const boundedY = Math.max(0, Math.min(2000, svgP.y))
 
-    setPolygon(prev => {
-      const next = [...prev]
-      next[activeNode] = { x: boundedX, y: boundedY }
-      return next
-    })
+    setPolygons(prev => {
+      const currentFloorPolygon = prev[activeFloorIndex] || [];
+      const nextPolygon = [...currentFloorPolygon];
+      nextPolygon[activeNode] = { x: Math.round(boundedX), y: Math.round(boundedY) };
+      const newPolygons = [...prev];
+      newPolygons[activeFloorIndex] = nextPolygon;
+      return newPolygons;
+    });
   }
 
   const handlePointerUp = (e: React.PointerEvent) => {
@@ -398,7 +424,7 @@ export default function App() {
     e.currentTarget.releasePointerCapture(e.pointerId)
   }
 
-  const handleSvgClick = (e: React.MouseEvent) => {
+  const handleSvgClick = async (e: React.MouseEvent) => {
     if (!svgRef.current) return
     // Only handle direct clicks on the SVG (or polygon), not on circles
     if ((e.target as any).tagName === 'circle') return
@@ -411,16 +437,151 @@ export default function App() {
     const svgP = pt.matrixTransform(svg.getScreenCTM()?.inverse())
     const newPt = { x: Math.round(svgP.x), y: Math.round(svgP.y) }
 
+    if (interactionMode === 'detectSkylight') {
+        if (!data?.sat_image_url) return;
+        // Load the satellite image to a canvas
+        const img = new Image();
+        img.crossOrigin = "Anonymous";
+        img.src = data.sat_image_url;
+        await new Promise(r => img.onload = r);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+            ctx.drawImage(img, 0, 0);
+            const skylight = cvDetectSkylightAtPoint(canvas, newPt, data.scale);
+            if (skylight) {
+                setSkylights(prev => [...prev, skylight]);
+            } else {
+                alert("No valid skylight detected near that click point.");
+            }
+        }
+        return;
+    }
+
+    // Default Edit Footprint Mode
     // Add point to the end and select it
-    setPolygon(prev => {
-      const next = [...prev, newPt]
-      setSelectedNode(next.length - 1)
-      return next
+    setPolygons(prev => {
+      const currentFloorPolygon = prev[activeFloorIndex] || [];
+
+      // If it's a completely empty floorplan (e.g. CV failed, or drawing a new floor from scratch)
+      // just drop a default square to start.
+      if (currentFloorPolygon.length === 0) {
+         const s = 30;
+         const defaultSquare = [
+            { x: newPt.x - s, y: newPt.y - s },
+            { x: newPt.x + s, y: newPt.y - s },
+            { x: newPt.x + s, y: newPt.y + s },
+            { x: newPt.x - s, y: newPt.y + s }
+         ];
+         const newPolygons = [...prev];
+         newPolygons[activeFloorIndex] = defaultSquare;
+         setSelectedNode(0);
+         return newPolygons;
+      }
+
+      const nextPolygon = [...currentFloorPolygon, newPt]
+      const newPolygons = [...prev]
+      newPolygons[activeFloorIndex] = nextPolygon
+      setSelectedNode(nextPolygon.length - 1)
+      return newPolygons
     })
   }
 
-  const polyStr = polygon.map(p => `${p.x},${p.y}`).join(" ")
-  const geom = data ? calculateGeometries(polygon, data.scale) : { area: 0, perimeter: 0 }
+  const handleToggleFloor = (floorIndex: number, enabled: boolean) => {
+    setEnabledFloors(prev => {
+        const next = [...prev];
+        next[floorIndex] = enabled;
+
+        // Cascading logic
+        if (enabled) {
+            // Selecting 3rd story (2) requires 2nd story (1) to be enabled
+            if (floorIndex === 2) next[1] = true;
+
+            // Auto-initialize polygon from the floor below if empty
+            setPolygons(currPolys => {
+                if (!currPolys[floorIndex] || currPolys[floorIndex].length === 0) {
+                    const newPolys = [...currPolys];
+                    // Find highest enabled floor below this one to copy from
+                    let copyFrom = 0;
+                    for (let i = floorIndex - 1; i >= 0; i--) {
+                        if (next[i] && currPolys[i] && currPolys[i].length > 0) {
+                            copyFrom = i;
+                            break;
+                        }
+                    }
+                    newPolys[floorIndex] = currPolys[copyFrom] ? [...currPolys[copyFrom]] : [];
+                    return newPolys;
+                }
+                return currPolys;
+            });
+
+            // Switch to editing this floor
+            setActiveFloorIndex(floorIndex);
+            setSelectedNode(null);
+        } else {
+            // Deselecting 2nd story (1) forces 3rd story (2) to be deselected
+            if (floorIndex === 1) next[2] = false;
+
+            // If we just disabled the floor we were editing, drop down
+            if (activeFloorIndex === floorIndex || (floorIndex === 1 && activeFloorIndex === 2)) {
+                let fallbackFloor = 0;
+                for (let i = floorIndex - 1; i >= 0; i--) {
+                    if (next[i]) {
+                        fallbackFloor = i;
+                        break;
+                    }
+                }
+                setActiveFloorIndex(fallbackFloor);
+                setSelectedNode(null);
+            }
+        }
+
+        return next;
+    });
+  }
+
+  const handleRescanSkylights = async () => {
+      if (!data?.sat_image_url) return;
+      setLoading(true);
+      try {
+          const img = new Image();
+          img.crossOrigin = "Anonymous";
+          img.src = data.sat_image_url;
+          await new Promise(r => img.onload = r);
+
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+              ctx.drawImage(img, 0, 0);
+              // Auto-detect uses the highest floor/roof defined
+              const roofPolygon = polygons[polygons.length - 1] || [];
+              const detected = cvAutoDetectSkylights(canvas, roofPolygon, data.scale);
+              if (detected.length > 0) {
+                  setSkylights(prev => [...prev, ...detected]);
+                  alert(`Successfully detected ${detected.length} skylights! Review the list and remove any false positives.`);
+              } else {
+                  alert("No distinct skylights were automatically detected inside the footprint.");
+              }
+          }
+      } finally {
+          setLoading(false);
+      }
+  }
+
+  const activePolyStr = (polygons[activeFloorIndex] || []).map(p => `${p.x},${p.y}`).join(" ")
+  const geom = data ? calculateGeometries(polygons[0] || [], data.scale) : { area: 0, perimeter: 0 } // Ground floor geometry
+
+  // Floor Colors: Ground (Blue), 2nd (Orange), 3rd (Purple)
+  const floorColors = [
+      { fill: "rgba(59, 130, 246, 0.3)", stroke: "#3b82f6" }, // Blue
+      { fill: "rgba(249, 115, 22, 0.3)", stroke: "#f97316" }, // Orange
+      { fill: "rgba(168, 85, 247, 0.3)", stroke: "#a855f7" }  // Purple
+  ];
 
   // Basic Manual J Estimation
   const calculateLoad = () => {
@@ -429,20 +590,65 @@ export default function App() {
     const dtCooling = outdoorSummerTemp - indoorSummerTemp
     const dtHeating = indoorWinterTemp - outdoorWinterTemp
 
+    // Find the active/highest floor defined for the roof area
+    // Iterate backwards to find the highest enabled floor index that has a valid polygon
+    let highestFloorPoly = polygons[0] || [];
+    for (let i = polygons.length - 1; i >= 0; i--) {
+        if (enabledFloors[i] && polygons[i] && polygons[i].length >= 3) {
+            highestFloorPoly = polygons[i];
+            break;
+        }
+    }
+    const roofAreaGeom = calculateGeometries(highestFloorPoly, data.scale);
+
+    // Sum up the perimeter of all ENABLED floors to get total wall area
+    // If multiple floors exist, each enabled floor contributes to the total exposed wall area.
+    let totalWallPerimeter = 0;
+    polygons.forEach((pts, i) => {
+        if (enabledFloors[i] && pts && pts.length >= 3) {
+            totalWallPerimeter += calculateGeometries(pts, data.scale).perimeter;
+        }
+    });
+    // If no polygons are drawn yet, fallback to 0
+    if (totalWallPerimeter === 0 && geom.perimeter > 0) totalWallPerimeter = geom.perimeter;
+
     // Area of elements
-    const wallArea = geom.perimeter * houseHeight * (secondStory ? 2 : 1)
+    const wallArea = totalWallPerimeter * houseHeight;
     const windowAreaTotal = windows.reduce((sum, w) => sum + (w.width * w.height), 0)
     const doorAreaTotal = doors.reduce((sum, d) => sum + (d.width * d.height), 0)
     const netWallArea = Math.max(0, wallArea - windowAreaTotal - doorAreaTotal)
-    const roofArea = geom.area
+    const roofArea = roofAreaGeom.area
+
+    // Area of new elements
+    const skylightAreaTotal = skylights.reduce((sum, s) => sum + (s.width * s.height), 0)
+
+    // Adjust roof area for skylights if attic type allows (assume no attic or vented still has skylights penetrating)
+    // Here we'll just subtract it from the raw roof Area to get net
+    const netRoofArea = Math.max(0, roofArea - skylightAreaTotal)
 
     // U-values = 1/R-value
-    const wallU = 1 / rValues.wall
-    const roofU = 1 / rValues.roof
+    const wallU = rValues.wall > 0 ? 1 / rValues.wall : 0
+    const roofU = attic.rValue > 0 ? 1 / attic.rValue : (rValues.roof > 0 ? 1 / rValues.roof : 0) // Fallback for old configs
+
+    // Foundation logic
+    const foundationU = foundation.rValue > 0 ? 1 / foundation.rValue : (foundation.type === 'Slab' ? 1.5 : 0.5) // basic assumptions for uninsulated
 
     // Sensible Cooling (BTU/h) = Area * U * DT
     const sensibleWallCool = netWallArea * wallU * dtCooling
-    const sensibleRoofCool = roofArea * roofU * dtCooling
+
+    // Roof load depends on attic type
+    let sensibleRoofCool = netRoofArea * roofU * dtCooling
+    if (attic.type === 'Vented') {
+        // Vented attics get much hotter than outdoor air in summer
+        sensibleRoofCool = netRoofArea * roofU * (dtCooling + 20)
+    } else if (attic.type === 'No Attic') {
+        // Direct roof exposure, somewhat higher sol-air temp
+        sensibleRoofCool = netRoofArea * roofU * (dtCooling + 10)
+    }
+
+    const sensibleFoundationCool = foundation.type === 'Slab'
+        ? geom.perimeter * foundationU * (dtCooling * 0.5) // Edge heat transfer is mostly what matters for slab
+        : geom.area * foundationU * (dtCooling * 0.5) // Crawlspace/Basement transfers through floor
 
     // Individual Window Cooling (Sensible = U*Area*DT + Area*SHGC*HTM_Solar)
     // Simplified HTM Solar based on standard approximations
@@ -453,8 +659,26 @@ export default function App() {
       let solarFactor = 30
       if (['E', 'W'].includes(w.orientation)) solarFactor = 60
       if (['SE', 'SW', 'S'].includes(w.orientation)) solarFactor = 45
+
+      // Overhang adjustment (simplified: reduces solar gain if it has an overhang)
+      // A deeper overhang closer to the window blocks more sun.
+      if (w.overhangDepth && w.overhangDepth > 0) {
+        // Very basic shading factor: reduce solar gain by up to 50% depending on depth vs height
+        // This is a highly simplified approximation
+        let shadeFactor = Math.min(0.5, w.overhangDepth / w.height)
+        solarFactor = solarFactor * (1 - shadeFactor)
+      }
+
       const solarGain = area * w.shgc * solarFactor
       return sum + conduction + solarGain
+    }, 0)
+
+    const sensibleSkylightCool = skylights.reduce((sum, s) => {
+        const area = s.width * s.height
+        const conduction = area * s.uValue * dtCooling
+        // Skylights get direct overhead sun, so solar gain factor is high
+        const solarGain = area * s.shgc * 70
+        return sum + conduction + solarGain
     }, 0)
 
     const sensibleDoorCool = doors.reduce((sum, d) => {
@@ -464,15 +688,31 @@ export default function App() {
 
     const sensibleInternalCool = residents * 230
 
-    const totalSensibleCooling = sensibleWallCool + sensibleRoofCool + sensibleWindowCool + sensibleDoorCool + sensibleInternalCool
+    const totalSensibleCooling = sensibleWallCool + sensibleRoofCool + sensibleFoundationCool + sensibleWindowCool + sensibleSkylightCool + sensibleDoorCool + sensibleInternalCool
 
     // Latent Cooling Load
     // Rough estimate based on infiltration and occupant moisture
     // People: ~200 BTU/h latent per person
     const latentInternalCool = residents * 200
     // Infiltration latent load: volume * air changes * moisture difference
-    const volume = geom.area * houseHeight * (secondStory ? 2 : 1)
-    const ach = 0.5 // assumption
+    // Calculate total volume by summing the footprint areas of all ENABLED floors * houseHeight
+    let totalVolume = 0;
+    polygons.forEach((pts, i) => {
+        if (enabledFloors[i] && pts && pts.length >= 3) {
+            totalVolume += calculateGeometries(pts, data.scale).area * houseHeight;
+        }
+    });
+    // Fallback if empty
+    if (totalVolume === 0) totalVolume = geom.area * houseHeight;
+
+    const volume = totalVolume;
+
+    // Calculate ACH based on envelope tightness and fireplaces
+    let ach = 0.5 // Average
+    if (envelope.tightness === 'Tight') ach = 0.3
+    if (envelope.tightness === 'Loose') ach = 0.8
+    // Fireplaces add extra leakage
+    ach += (envelope.fireplaces * 0.1)
 
     // Convert humidity to grains of moisture difference
     // Simple estimation: 1 grain = ~0.00014 lbs water. 1 BTU evaporates ~0.001 lbs water.
@@ -488,11 +728,20 @@ export default function App() {
 
     // Heating (BTU/h)
     const heatWall = netWallArea * wallU * dtHeating
-    const heatRoof = roofArea * roofU * dtHeating
+    const heatRoof = netRoofArea * roofU * dtHeating
+
+    const heatFoundation = foundation.type === 'Slab'
+        ? geom.perimeter * foundationU * (dtHeating * 0.5)
+        : geom.area * foundationU * (dtHeating * 0.5)
 
     const heatWindow = windows.reduce((sum, w) => {
       const area = w.width * w.height
       return sum + (area * w.uValue * dtHeating)
+    }, 0)
+
+    const heatSkylight = skylights.reduce((sum, s) => {
+        const area = s.width * s.height
+        return sum + (area * s.uValue * dtHeating)
     }, 0)
 
     const heatDoor = doors.reduce((sum, d) => {
@@ -500,14 +749,43 @@ export default function App() {
       return sum + (area * d.uValue * dtHeating)
     }, 0)
 
-    const totalHeating = heatWall + heatRoof + heatWindow + heatDoor
+    // Infiltration Heating Load (Sensible)
+    // 1.08 * CFM * DT
+    const heatInfiltration = 1.08 * cfm * dtHeating
+
+    let totalHeating = heatWall + heatRoof + heatFoundation + heatWindow + heatSkylight + heatDoor + heatInfiltration
+
+    // Apply Duct Loss / Gain Multipliers
+    let ductMultiplier = 1.0
+    // If ducts are in unconditioned space, they lose/gain heat
+    if (ductSystem.location === 'Attic' || ductSystem.location === 'Crawlspace') {
+        // Base penalty for being in unconditioned space
+        ductMultiplier += 0.10
+
+        if (ductSystem.leakage === 'Average (10%)') ductMultiplier += 0.05
+        else if (ductSystem.leakage === 'Leaky (15%)') ductMultiplier += 0.10
+        // Tight is 0% added penalty
+
+        // Insulation reduction (very rough approx: R8 drops penalty by 4%)
+        if (ductSystem.insulationRValue > 0) {
+            ductMultiplier -= (ductSystem.insulationRValue * 0.005)
+        }
+    }
+
+    // Ensure multiplier doesn't go below 1.0 (can't have negative loss)
+    ductMultiplier = Math.max(1.0, ductMultiplier)
+
+    const finalCooling = totalCooling * ductMultiplier
+    const finalCoolingSensible = totalSensibleCooling * ductMultiplier
+    const finalCoolingLatent = totalLatentCooling * ductMultiplier
+    const finalHeating = totalHeating * ductMultiplier
 
     return {
-      cooling: Math.round(totalCooling),
-      coolingSensible: Math.round(totalSensibleCooling),
-      coolingLatent: Math.round(totalLatentCooling),
-      heating: Math.round(totalHeating),
-      tons: (totalCooling / 12000).toFixed(1)
+      cooling: Math.round(finalCooling),
+      coolingSensible: Math.round(finalCoolingSensible),
+      coolingLatent: Math.round(finalCoolingLatent),
+      heating: Math.round(finalHeating),
+      tons: (finalCooling / 12000).toFixed(1)
     }
   }
 
@@ -519,12 +797,17 @@ export default function App() {
       sourceData: data,
       state: {
         url,
-        polygon,
+        polygons,
+        enabledFloors,
         houseHeight,
-        secondStory,
         residents,
         windows,
         doors,
+        skylights,
+        ductSystem,
+        foundation,
+        attic,
+        envelope,
         rValues,
         indoorSummerTemp,
         indoorWinterTemp,
@@ -555,11 +838,34 @@ export default function App() {
         if (imported.sourceData && imported.state) {
           setData(imported.sourceData)
           setUrl(imported.state.url)
-          setPolygon(imported.state.polygon)
+
+          // Backwards compatibility for old JSONs that had a single `polygon`
+          if (imported.state.polygons) {
+             setPolygons(imported.state.polygons)
+          } else if (imported.state.polygon) {
+             setPolygons([imported.state.polygon])
+          } else {
+             setPolygons([])
+          }
+
+          if (imported.state.enabledFloors) {
+             setEnabledFloors(imported.state.enabledFloors)
+          } else {
+             // Fallback: estimate enabled floors based on length of imported polygons
+             const newEnabled = [true, false, false]
+             if (imported.state.polygons && imported.state.polygons.length > 1) newEnabled[1] = true
+             if (imported.state.polygons && imported.state.polygons.length > 2) newEnabled[2] = true
+             setEnabledFloors(newEnabled)
+          }
+
           setHouseHeight(imported.state.houseHeight)
-          setSecondStory(imported.state.secondStory)
-          setWindows(imported.state.windows)
-          setDoors(imported.state.doors)
+          setWindows(imported.state.windows || [])
+          setDoors(imported.state.doors || [])
+          setSkylights(imported.state.skylights || [])
+          if (imported.state.ductSystem) setDuctSystem(imported.state.ductSystem)
+          if (imported.state.foundation) setFoundation(imported.state.foundation)
+          if (imported.state.attic) setAttic(imported.state.attic)
+          if (imported.state.envelope) setEnvelope(imported.state.envelope)
           setRValues(imported.state.rValues)
           setIndoorSummerTemp(imported.state.indoorSummerTemp)
           setIndoorWinterTemp(imported.state.indoorWinterTemp)
@@ -658,11 +964,57 @@ export default function App() {
                   </div>
                 </div>
               </div>
-              <p className="text-sm text-gray-500 mb-4">
-                Drag points to align. Click on the map to add a point. Click a point to highlight it, then press <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">D</strong> / <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">Delete</strong> to delete it, or <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">A</strong> / <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">N</strong> to insert a new vertex next to it.
-              </p>
+              <div className="flex flex-col gap-4 mb-4">
+                  <div className="flex flex-col md:flex-row md:justify-between md:items-center bg-gray-50 p-2 rounded border gap-4">
+                    <div className="flex items-center gap-4 flex-wrap">
+                        <span className="text-sm font-semibold text-gray-700">Floors:</span>
+                        {[
+                          { id: 0, label: "Ground", colorClass: "text-blue-600" },
+                          { id: 1, label: "2nd Story", colorClass: "text-orange-600" },
+                          { id: 2, label: "3rd Story", colorClass: "text-purple-600" }
+                        ].map(floor => (
+                           <div key={floor.id} className="flex items-center gap-1.5 bg-white px-2 py-1 rounded shadow-sm border text-sm">
+                             <input
+                               type="checkbox"
+                               checked={enabledFloors[floor.id]}
+                               onChange={(e) => handleToggleFloor(floor.id, e.target.checked)}
+                               disabled={floor.id === 0} // Ground floor always enabled
+                               className="w-3.5 h-3.5 cursor-pointer disabled:opacity-50"
+                             />
+                             <button
+                               onClick={() => {
+                                 if (!enabledFloors[floor.id]) handleToggleFloor(floor.id, true);
+                                 else { setActiveFloorIndex(floor.id); setSelectedNode(null); }
+                               }}
+                               className={`font-medium ${floor.colorClass} hover:underline ${activeFloorIndex === floor.id ? 'underline font-bold' : ''}`}
+                             >
+                               {floor.label}
+                             </button>
+                           </div>
+                        ))}
+                    </div>
+                    <div className="flex bg-gray-100 p-1 rounded-lg shadow-sm border border-gray-200">
+                        <button
+                          onClick={() => setInteractionMode('editFootprint')}
+                          className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${interactionMode === 'editFootprint' ? 'bg-white text-blue-700 shadow border border-gray-200' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                          Edit Footprint
+                        </button>
+                        <button
+                          onClick={() => { setInteractionMode('detectSkylight'); setShowSatellite(true); }}
+                          className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${interactionMode === 'detectSkylight' ? 'bg-white text-blue-700 shadow border border-gray-200' : 'text-gray-500 hover:text-gray-700'}`}
+                          title="Click on the map to auto-detect a skylight at that location"
+                        >
+                          Detect Skylight
+                        </button>
+                    </div>
+                  </div>
+                  <p className="text-sm text-gray-500 flex-1">
+                    Drag points to align. Click on the map to add a point. Click a point to highlight it, then press <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">D</strong> / <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">Delete</strong> to delete it, or <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">A</strong> / <strong className="text-gray-700 bg-gray-100 px-1 py-0.5 rounded border border-gray-200">N</strong> to insert a new vertex next to it.
+                  </p>
+              </div>
 
-              <div ref={containerRef} className="border rounded-lg overflow-auto select-none bg-gray-100" style={{height: "600px"}}>
+              <div ref={containerRef} className={`border rounded-lg overflow-auto select-none bg-gray-100 ${interactionMode === 'detectSkylight' ? 'cursor-crosshair' : ''}`} style={{height: "600px"}}>
                 <div style={{ width: `${3000 * zoomScale}px`, height: `${2000 * zoomScale}px`, overflow: 'hidden' }}>
                   <div className="relative w-[3000px] h-[2000px]" style={{ transform: `scale(${zoomScale})`, transformOrigin: 'top left' }}>
                     <img
@@ -683,26 +1035,51 @@ export default function App() {
                     viewBox="0 0 3000 2000"
                     preserveAspectRatio="xMidYMid meet"
                   >
-                  <polygon
-                    points={polyStr}
-                    fill="rgba(59, 130, 246, 0.3)"
-                    stroke="#3b82f6"
-                    strokeWidth="3"
-                  />
-                  {polygon.map((pt, i) => (
+                  {/* Render inactive floors first so they are behind */}
+                  {polygons.map((pts, floorIndex) => {
+                      if (floorIndex === activeFloorIndex || !pts || pts.length === 0 || !enabledFloors[floorIndex]) return null;
+                      const fColor = floorColors[floorIndex] || floorColors[0];
+                      const ptsStr = pts.map(p => `${p.x},${p.y}`).join(" ");
+                      return (
+                          <polygon
+                              key={`floor-${floorIndex}`}
+                              points={ptsStr}
+                              fill={fColor.fill}
+                              stroke={fColor.stroke}
+                              strokeWidth="1.5"
+                              opacity={0.5}
+                              style={{ pointerEvents: 'none' }}
+                          />
+                      );
+                  })}
+
+                  {/* Render active floor */}
+                  {enabledFloors[activeFloorIndex] && (
+                    <polygon
+                      points={activePolyStr}
+                      fill={(floorColors[activeFloorIndex] || floorColors[0]).fill}
+                      stroke={(floorColors[activeFloorIndex] || floorColors[0]).stroke}
+                      strokeWidth="3"
+                      style={{ pointerEvents: interactionMode === 'detectSkylight' ? 'none' : 'auto' }}
+                    />
+                  )}
+                  {enabledFloors[activeFloorIndex] && (polygons[activeFloorIndex] || []).map((pt, i) => (
                     <circle
                       key={i}
                       cx={pt.x}
                       cy={pt.y}
                       r={selectedNode === i ? "9" : "6"}
                       fill={selectedNode === i ? "#ea4335" : "white"}
-                      stroke={selectedNode === i ? "white" : "#2563eb"}
+                      stroke={selectedNode === i ? "white" : (floorColors[activeFloorIndex] || floorColors[0]).stroke}
                       strokeWidth={selectedNode === i ? "3" : "2"}
-                      className="cursor-move"
-                      onPointerDown={(e) => handlePointerDown(e, i)}
+                      className={interactionMode === 'editFootprint' ? "cursor-move" : ""}
+                      onPointerDown={(e) => {
+                          if (interactionMode === 'editFootprint') handlePointerDown(e, i);
+                      }}
                       style={{
                         transition: "r 0.15s ease, fill 0.15s ease",
-                        filter: selectedNode === i ? "drop-shadow(0 0 4px rgba(234, 67, 53, 0.6))" : "none"
+                        filter: selectedNode === i ? "drop-shadow(0 0 4px rgba(234, 67, 53, 0.6))" : "none",
+                        pointerEvents: interactionMode === 'detectSkylight' ? 'none' : 'auto'
                       }}
                     />
                   ))}
@@ -738,21 +1115,105 @@ export default function App() {
                     <label className="block text-sm text-gray-600 mb-1">Number of Occupants</label>
                     <input type="number" className="w-full p-2 border rounded" value={residents} onChange={e => setResidents(Number(e.target.value))} />
                   </div>
-                  <div className="col-span-2 flex items-center gap-2 mt-2">
-                    <input type="checkbox" id="secondStory" checked={secondStory} onChange={e => setSecondStory(e.target.checked)} className="w-4 h-4" />
-                    <label htmlFor="secondStory" className="text-sm">Has 2nd Story (doubles wall area)</label>
-                  </div>
                 </div>
 
                 <div className="mt-6 border-t pt-4">
                   <WindowsDoors
                     windows={windows} setWindows={setWindows}
                     doors={doors} setDoors={setDoors}
+                    skylights={skylights} setSkylights={setSkylights}
+                    onRescanSkylights={handleRescanSkylights}
                   />
                 </div>
 
                 <div className="mt-6 border-t pt-4">
-                  <h3 className="text-sm font-semibold mb-3 border-b pb-2">Climate & Envelope Defaults</h3>
+                  <h3 className="text-sm font-semibold mb-3 border-b pb-2">Envelope Defaults</h3>
+
+                  <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                    <div>
+                      <label className="block text-gray-500 mb-1">Wall R-Value</label>
+                      <input type="number" className="w-full p-1 border rounded" value={rValues.wall} onChange={e => setRValues({...rValues, wall: Number(e.target.value)})} />
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 mb-1">Old Roof R-Value (Legacy)</label>
+                      <input type="number" className="w-full p-1 border rounded" value={rValues.roof} onChange={e => setRValues({...rValues, roof: Number(e.target.value)})} />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                    <div>
+                      <label className="block text-gray-500 mb-1">Attic Type</label>
+                      <select className="w-full p-1 border rounded" value={attic.type} onChange={e => setAttic({...attic, type: e.target.value as any})}>
+                        <option value="Vented">Vented</option>
+                        <option value="Unvented">Unvented</option>
+                        <option value="No Attic">No Attic</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 mb-1">Attic R-Value</label>
+                      <input type="number" className="w-full p-1 border rounded" value={attic.rValue} onChange={e => setAttic({...attic, rValue: Number(e.target.value)})} />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                    <div>
+                      <label className="block text-gray-500 mb-1">Foundation Type</label>
+                      <select className="w-full p-1 border rounded" value={foundation.type} onChange={e => setFoundation({...foundation, type: e.target.value as any})}>
+                        <option value="Slab">Slab</option>
+                        <option value="Crawlspace">Crawlspace</option>
+                        <option value="Basement">Basement</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 mb-1">Foundation R-Value</label>
+                      <input type="number" className="w-full p-1 border rounded" value={foundation.rValue} onChange={e => setFoundation({...foundation, rValue: Number(e.target.value)})} />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                    <div>
+                      <label className="block text-gray-500 mb-1">Envelope Tightness</label>
+                      <select className="w-full p-1 border rounded" value={envelope.tightness} onChange={e => setEnvelope({...envelope, tightness: e.target.value as any})}>
+                        <option value="Tight">Tight</option>
+                        <option value="Average">Average</option>
+                        <option value="Loose">Loose</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 mb-1">Fireplaces</label>
+                      <input type="number" className="w-full p-1 border rounded" value={envelope.fireplaces} onChange={e => setEnvelope({...envelope, fireplaces: Number(e.target.value)})} />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-6 border-t pt-4">
+                  <h3 className="text-sm font-semibold mb-3 border-b pb-2">Duct System</h3>
+                  <div className="grid grid-cols-3 gap-4 text-sm mb-4">
+                    <div>
+                      <label className="block text-gray-500 mb-1">Location</label>
+                      <select className="w-full p-1 border rounded" value={ductSystem.location} onChange={e => setDuctSystem({...ductSystem, location: e.target.value as any})}>
+                        <option value="Attic">Attic</option>
+                        <option value="Crawlspace">Crawlspace</option>
+                        <option value="Conditioned Space">Conditioned Space</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 mb-1">Leakage</label>
+                      <select className="w-full p-1 border rounded" value={ductSystem.leakage} onChange={e => setDuctSystem({...ductSystem, leakage: e.target.value as any})}>
+                        <option value="Tight (5%)">Tight (5%)</option>
+                        <option value="Average (10%)">Average (10%)</option>
+                        <option value="Leaky (15%)">Leaky (15%)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 mb-1">Insulation R-Value</label>
+                      <input type="number" className="w-full p-1 border rounded" value={ductSystem.insulationRValue} onChange={e => setDuctSystem({...ductSystem, insulationRValue: Number(e.target.value)})} />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-6 border-t pt-4">
+                  <h3 className="text-sm font-semibold mb-3 border-b pb-2">Climate Defaults</h3>
 
                   <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 text-sm mb-4">
                     <div>
@@ -784,16 +1245,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <label className="block text-gray-500 mb-1">Wall R-Value</label>
-                      <input type="number" className="w-full p-1 border rounded" value={rValues.wall} onChange={e => setRValues({...rValues, wall: Number(e.target.value)})} />
-                    </div>
-                    <div>
-                      <label className="block text-gray-500 mb-1">Roof R-Value</label>
-                      <input type="number" className="w-full p-1 border rounded" value={rValues.roof} onChange={e => setRValues({...rValues, roof: Number(e.target.value)})} />
-                    </div>
-                  </div>
                 </div>
               </div>
 

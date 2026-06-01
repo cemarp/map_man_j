@@ -35,7 +35,7 @@ export async function captureMapCanvas(
     const tileUrl = showSatellite
       ? 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}' // Satellite
       : 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}'; // Standard Map
-      
+
     const tileLayer = L.tileLayer(tileUrl, {
       crossOrigin: true, // loads tiles with Access-Control-Allow-Origin: * to prevent tainted canvas
       maxZoom: 22
@@ -62,7 +62,7 @@ export async function captureMapCanvas(
       if (isCleanedUp) return;
       isCleanedUp = true;
       tileLayer.off('load');
-      
+
       try {
         console.log("Tile loading timed out. Capturing current state...");
         const canvas = await html2canvas(tempDiv, {
