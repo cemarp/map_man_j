@@ -33,3 +33,32 @@ The task is to implement a dual-capture feature for an HVAC Manual J calculation
   1. Add explicit waits before triggering the extraction:
      `page.wait_for_load_state("networkidle")` and `page.wait_for_timeout(2000)`.
   2. Run the script in headed mode using an X server. In headless CI or Sandbox environments, use `xvfb-run python3 your_script.py`. Setting `headless=False` ensures a real paint cycle occurs.
+
+## Dependency and Execution Verification Strategies
+
+### 1. Detection of Container & E2E Hangs
+* **Attach Browser Console Listeners**: Always attach a console message listener during browser context creation in E2E tests:
+  ```python
+  page.on("console", lambda msg: print(f"BROWSER CONSOLE: {msg.text}"))
+  ```
+  This immediately catches runtime bundler failures (e.g. `Vite: Failed to resolve import`) or unhandled exceptions that cause silent freezes in headless Chromium.
+* **Inspect Live Container Logs**: When a test fails or hangs, check container logs directly rather than relying solely on the script's output:
+  ```bash
+  docker compose logs frontend --tail 50
+  ```
+* **Python Output Unbuffering**: In headless background execution tasks (like background Python scripts), run Python with output unbuffering to prevent log caching from hiding failures:
+  ```bash
+  python -u test_e2e_spreadsheet.py
+  # or set environment variable PYTHONUNBUFFERED=1
+  ```
+
+### 2. Prevention of Container & E2E Hangs
+* **Volume Cache Invalidation on Dependency Changes**: Simply running `docker compose up --build` will reuse cached volume directories (like `/app/node_modules`) and fail to install newly introduced packages. When adding/modifying dependencies in `package.json`, always purge volumes to force a fresh install inside the container:
+  ```bash
+  docker compose down -v
+  docker compose up -d --build
+  ```
+* **OpenCV / Asset Initialisation Guards**: Avoid using static/arbitrary sleep intervals (e.g., `page.wait_for_timeout(5000)`) for heavy WebAssembly module loads. Instead, expose status hooks (e.g. `window.cvLoaded = true`) in the frontend and use Playwright dynamic state polling:
+  ```python
+  page.wait_for_function("window.cvLoaded === true", timeout=30000)
+  ```

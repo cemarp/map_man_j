@@ -11,11 +11,12 @@ def test_spreadsheet_e2e():
     frontend recalculates loads correctly based on the new value.
     """
     with sync_playwright() as p:
-        # Launch browser. Headed needed for html2canvas
-        browser = p.chromium.launch(headless=False)
+        # Launch browser headlessly
+        browser = p.chromium.launch(headless=True)
         # Create a new browser context that accepts downloads
         context = browser.new_context(accept_downloads=True)
         page = context.new_page()
+        page.on("console", lambda msg: print(f"BROWSER CONSOLE: {msg.text}"))
 
         try:
             page.goto("http://localhost:3000")
