@@ -79,7 +79,10 @@ export default function App() {
   const [envelope, setEnvelope] = useState<Envelope>({ tightness: 'Average', fireplaces: 0 })
 
   const svgRef = useRef<SVGSVGElement>(null)
+
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const spreadsheetInputRef = useRef<HTMLInputElement>(null)
+
   const containerRef = useRef<HTMLDivElement>(null)
 
   const [cvLoaded, setCvLoaded] = useState(false)
@@ -828,6 +831,44 @@ export default function App() {
     link.click()
   }
 
+
+  const handleSpreadsheetImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const { handleSpreadsheetImport } = await import("./utils/spreadsheetExport");
+      const currentState = {
+        indoorSummerTemp, outdoorSummerTemp, indoorHumidity, outdoorHumidity,
+        indoorWinterTemp, outdoorWinterTemp, residents, houseHeight,
+        rValues, attic, foundation, windows, doors, skylights
+      };
+
+      const newState = await handleSpreadsheetImport(file, currentState);
+
+      // Update state hooks
+      setIndoorSummerTemp(newState.indoorSummerTemp);
+      setOutdoorSummerTemp(newState.outdoorSummerTemp);
+      setIndoorHumidity(newState.indoorHumidity);
+      setOutdoorHumidity(newState.outdoorHumidity);
+      setIndoorWinterTemp(newState.indoorWinterTemp);
+      setOutdoorWinterTemp(newState.outdoorWinterTemp);
+      setResidents(newState.residents);
+      setHouseHeight(newState.houseHeight);
+      setRValues(newState.rValues);
+      setAttic(newState.attic);
+      setFoundation(newState.foundation);
+      setWindows(newState.windows);
+      setDoors(newState.doors);
+      setSkylights(newState.skylights);
+
+      // Clear file input
+      if (spreadsheetInputRef.current) spreadsheetInputRef.current.value = '';
+    } catch (err) {
+      alert("Error importing spreadsheet: " + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
@@ -889,9 +930,16 @@ export default function App() {
           <div className="flex justify-between items-center mb-4">
             <h1 className="text-2xl font-bold">Auto Manual J Calculator</h1>
             <div className="space-x-2">
+
               <input type="file" accept=".json" className="hidden" ref={fileInputRef} onChange={handleImport} />
               <button onClick={() => fileInputRef.current?.click()} className="text-sm px-3 py-1.5 border rounded hover:bg-gray-50">Import JSON</button>
               <button onClick={handleExport} className="text-sm px-3 py-1.5 border rounded hover:bg-gray-50" disabled={!data}>Export JSON</button>
+
+              <input type="file" accept=".xlsx" className="hidden" ref={spreadsheetInputRef} onChange={handleSpreadsheetImport} />
+              <button onClick={() => spreadsheetInputRef.current?.click()} className="text-sm px-3 py-1.5 border rounded hover:bg-gray-50 bg-green-50 text-green-700">Import Spreadsheet</button>
+
+              <button onClick={() => import("./utils/spreadsheetExport").then(m => m.handleSpreadsheetExport({sourceData: data, state: {indoorSummerTemp, outdoorSummerTemp, indoorHumidity, outdoorHumidity, indoorWinterTemp, outdoorWinterTemp, residents, houseHeight, rValues, attic, foundation, windows, doors, skylights}, computed: { totalArea: calculateGeometries(polygons[0] || [], data?.scale || 1).area, wallArea: (calculateGeometries(polygons[0] || [], data?.scale || 1).perimeter || geom?.perimeter || 0) * houseHeight, roofArea: calculateGeometries(polygons[0] || [], data?.scale || 1).area }}))} className="text-sm px-3 py-1.5 border rounded hover:bg-gray-50 bg-green-500 text-white" disabled={!data}>Export Spreadsheet</button>
+
             </div>
           </div>
           <div className="flex gap-4">
