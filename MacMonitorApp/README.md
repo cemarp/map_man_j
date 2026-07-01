@@ -35,7 +35,7 @@ Because the interaction between a main app and a privileged helper tool via XPC 
 1. In Xcode, go to **File > New > Target**.
 2. Select **macOS > XPC Service** (or Command Line Tool if you prefer configuring `SMAppService` manually, but XPC Service handles some boilerplate).
 3. Name it `com.yourdomain.MacMonitor.HelperTool`.
-4. Delete the default generated files for this target.
+4. Delete the default generated Swift files for this target (`main.swift` or the default service file), but **do NOT delete the `Info.plist`** if Xcode generated one in that folder. If Xcode 14+ didn't generate an `Info.plist` as a separate file, you can manage it via the Target's "Info" tab.
 5. Drag and drop the following files into the new Helper Tool folder in Xcode:
     *   `HelperTool/main.swift`
     *   `HelperTool/MacMonitorHelper.swift`
