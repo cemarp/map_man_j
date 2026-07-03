@@ -73,26 +73,34 @@ struct BatteryControlView: View {
         VStack(alignment: .leading, spacing: 15) {
             Text("Battery Controls").font(.headline)
 
-            HStack {
-                Text("Charge Limit: \(viewModel.batteryState.chargeLimit)%")
-                Slider(value: Binding(
-                    get: { Double(viewModel.batteryState.chargeLimit) },
-                    set: { viewModel.batteryState.chargeLimit = Int($0) }
-                ), in: 20...100, step: 1)
-            }
+            Toggle("Enable Charge Limit", isOn: $viewModel.batteryState.chargeLimitEnabled)
 
-            Toggle("Enable Sailing Mode", isOn: $viewModel.batteryState.sailingModeEnabled)
-
-            if viewModel.batteryState.sailingModeEnabled {
+            if viewModel.batteryState.chargeLimitEnabled {
                 HStack {
-                    Text("Sailing Lower Limit: \(viewModel.batteryState.sailingModeLowerLimit)%")
+                    Text("Charge Limit: \(viewModel.batteryState.chargeLimit)%")
                     Slider(value: Binding(
-                        get: { Double(viewModel.batteryState.sailingModeLowerLimit) },
-                        set: { viewModel.batteryState.sailingModeLowerLimit = Int($0) }
-                    ), in: 10...Double(viewModel.batteryState.chargeLimit - 1), step: 1)
+                        get: { Double(viewModel.batteryState.chargeLimit) },
+                        set: { viewModel.batteryState.chargeLimit = Int($0) }
+                    ), in: 20...100, step: 1)
                 }
                 .padding(.leading, 20)
+
+                Toggle("Enable Sailing Mode", isOn: $viewModel.batteryState.sailingModeEnabled)
+                    .padding(.leading, 20)
+
+                if viewModel.batteryState.sailingModeEnabled {
+                    HStack {
+                        Text("Sailing Lower Limit: \(viewModel.batteryState.sailingModeLowerLimit)%")
+                        Slider(value: Binding(
+                            get: { Double(viewModel.batteryState.sailingModeLowerLimit) },
+                            set: { viewModel.batteryState.sailingModeLowerLimit = Int($0) }
+                        ), in: 10...Double(viewModel.batteryState.chargeLimit - 1), step: 1)
+                    }
+                    .padding(.leading, 40)
+                }
             }
+
+            Divider()
 
             Toggle("Force Discharge (Inhibit Charge)", isOn: $viewModel.batteryState.forceDischarge)
         }

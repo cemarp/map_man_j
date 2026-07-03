@@ -104,14 +104,17 @@ class MacMonitorHelper: NSObject, MacMonitorHelperProtocol {
         do {
             let state = try JSONDecoder().decode(BatteryControlState.self, from: stateData)
 
+            // Determine the target limit based on whether the feature is enabled
+            let targetLimit = state.chargeLimitEnabled ? state.chargeLimit : 100
+
             // In a real app, this is where you write to the SMC keys to control charging.
             // e.g., to set charge limit:
-            // smc_write("BCLM", state.chargeLimit)
+            // smc_write("BCLM", targetLimit)
 
             // e.g., to force discharge (inhibit charging):
             // smc_write("CH0I", state.forceDischarge ? 1 : 0) // Example key, actual keys vary by Mac model
 
-            print("Received new battery control state: Limit: \(state.chargeLimit), Sailing: \(state.sailingModeEnabled), Force Discharge: \(state.forceDischarge)")
+            print("Received new battery control state: LimitEnabled: \(state.chargeLimitEnabled) (Target: \(targetLimit)%), Sailing: \(state.sailingModeEnabled), Force Discharge: \(state.forceDischarge)")
 
             reply(true, nil)
         } catch {
