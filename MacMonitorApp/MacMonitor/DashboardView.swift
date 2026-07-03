@@ -34,11 +34,19 @@ struct CurrentStatsView: View {
     let metrics: SystemMetrics
 
     var body: some View {
-        HStack(spacing: 40) {
-            StatBox(title: "Total Power", value: String(format: "%.1f W", metrics.totalPower))
-            StatBox(title: "CPU Temp", value: String(format: "%.1f °C", metrics.cpuTemp))
-            StatBox(title: "Battery", value: String(format: "%.0f%%", metrics.batteryLevel))
-            StatBox(title: "Cycles", value: "\(metrics.batteryCycles)")
+        VStack(spacing: 20) {
+            HStack(spacing: 40) {
+                StatBox(title: "Total Power", value: String(format: "%.1f W", metrics.totalPower))
+                StatBox(title: "CPU Temp", value: String(format: "%.1f °C", metrics.cpuTemp))
+                StatBox(title: "Battery Level", value: String(format: "%.0f%%", metrics.batteryLevel))
+                StatBox(title: "Cycles", value: "\(metrics.batteryCycles)")
+            }
+
+            HStack(spacing: 40) {
+                StatBox(title: "Battery Voltage", value: String(format: "%.2f V", metrics.batteryVoltage))
+                StatBox(title: "Battery Current", value: String(format: "%.2f A", metrics.batteryCurrent))
+                StatBox(title: "Battery Power", value: String(format: "%.2f W", metrics.batteryPower))
+            }
         }
     }
 }

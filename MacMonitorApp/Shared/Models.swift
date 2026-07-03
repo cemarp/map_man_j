@@ -18,10 +18,13 @@ public struct SystemMetrics: Codable, Identifiable {
     // Battery Info
     public let batteryLevel: Double // Percentage (0-100)
     public let batteryCycles: Int
+    public let batteryVoltage: Double // In Volts (V)
+    public let batteryCurrent: Double // In Amps (A). Positive is charging, negative is discharging.
+    public let batteryPower: Double // In Watts (W). Derived from V * A.
     public let isCharging: Bool
     public let isDischarging: Bool
 
-    public init(id: UUID = UUID(), timestamp: Date = Date(), totalPower: Double, cpuPower: Double, gpuPower: Double, anePower: Double, cpuTemp: Double, gpuTemp: Double, batteryTemp: Double, batteryLevel: Double, batteryCycles: Int, isCharging: Bool, isDischarging: Bool) {
+    public init(id: UUID = UUID(), timestamp: Date = Date(), totalPower: Double, cpuPower: Double, gpuPower: Double, anePower: Double, cpuTemp: Double, gpuTemp: Double, batteryTemp: Double, batteryLevel: Double, batteryCycles: Int, batteryVoltage: Double, batteryCurrent: Double, batteryPower: Double, isCharging: Bool, isDischarging: Bool) {
         self.id = id
         self.timestamp = timestamp
         self.totalPower = totalPower
@@ -33,6 +36,9 @@ public struct SystemMetrics: Codable, Identifiable {
         self.batteryTemp = batteryTemp
         self.batteryLevel = batteryLevel
         self.batteryCycles = batteryCycles
+        self.batteryVoltage = batteryVoltage
+        self.batteryCurrent = batteryCurrent
+        self.batteryPower = batteryPower
         self.isCharging = isCharging
         self.isDischarging = isDischarging
     }
